@@ -672,23 +672,33 @@ class Brain(TankProgram):
         return 0
 
     def _predict(self, e, mx, my, model=None):
+        """Предсказание позиции врага с учётом его движения.
+        
+        Использует 3 модели: постоянная скорость, дуга по ω, ускорение.
+        """
         if model is None:
             model = self._best_model()
         x, y = e.x, e.y
         vx, vy = e.vx, e.vy
         om = self.e_omega
+        ax = self.e_ax
+        ay = self.e_ay
         t = hypot(x - mx, y - my) / BULLET_SPEED
-        for _ in range(2):
+        
+        for _ in range(3):  # больше итераций для точности
             if model == 1 and fabs(om) > 0.06 and hypot(vx, vy) > 30.0:
+                # Модель дуги: движение по окружности
                 a = atan2(vy, vx)
                 da = om * t
                 r = hypot(vx, vy) / om
                 nx = x + r * (sin(a + da) - sin(a))
                 ny = y - r * (cos(a + da) - cos(a))
-            elif model == 2:
-                nx = x + vx * t + 0.5 * self.e_ax * t * t
-                ny = y + vy * t + 0.5 * self.e_ay * t * t
+            elif model == 2 and (fabs(ax) > 10.0 or fabs(ay) > 10.0):
+                # Модель с ускорением
+                nx = x + vx * t + 0.5 * ax * t * t
+                ny = y + vy * t + 0.5 * ay * t * t
             else:
+                # Модель постоянной скорости (наиболее стабильная)
                 nx = x + vx * t
                 ny = y + vy * t
             t = hypot(nx - mx, ny - my) / BULLET_SPEED
@@ -818,9 +828,17 @@ class Brain(TankProgram):
         return cmd, True
 
     def _pen_band(self, o, me, px, py, phull, d, t_fly):
+        """Ищем самую широкую полосу пробития через корпус врага.
+        
+        Возвращает (точка_прицела, lo, hi) в абсолютных углах; None — пробития нет.
+        """
         bearing = atan2(py - me.y, px - me.x)
+        
+        # Запас по углу к нормали брони
         om_unc = 0.45 * fabs(self.e_omega) + 0.12
         margin = SPREAD_DEG + 1.6 + degrees(om_unc * min(t_fly, 0.7))
+        
+        # Дополнительный запас если враг в зоне ракурса
         phi = fabs(degrees(wrap(atan2(me.y - py, me.x - px) - phull)))
         if phi > 90.0:
             phi = 180.0 - phi
@@ -829,9 +847,12 @@ class Brain(TankProgram):
             margin += 4.5
         if margin > 14.0:
             margin = 14.0
+        
+        # Угол сканирования: шире на ближних дистанциях
         half_ang = atan2(20.0 + 7.0, max(d, 60.0))
-        N = 11
+        N = 15  # больше точек для более точного поиска
         good = []
+        
         for k in range(N):
             a = bearing - half_ang + 2.0 * half_ang * k / (N - 1)
             dx, dy = cos(a), sin(a)
@@ -841,8 +862,10 @@ class Brain(TankProgram):
             if hit is None:
                 good.append(None)
                 continue
+            # Проверяем пробитие с запасом
             good.append(a if pen_ok(hit[2], hit[1], margin) else None)
 
+        # Ищем самую широкую непрерывную полосу
         mid_n = (N - 1) / 2.0
         best = None
         k = 0
@@ -854,10 +877,12 @@ class Brain(TankProgram):
             while j + 1 < N and good[j + 1] is not None:
                 j += 1
             m = (k + j) // 2
+            # Предпочитаем более широкие полосы и ближе к центру
             key = (j - k, -abs(m - mid_n))
             if best is None or key > best[0]:
                 best = (key, k, j)
             k = j + 1
+        
         if best is None:
             return None, 0.0, 0.0
         _, k, j = best
