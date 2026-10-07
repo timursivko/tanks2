@@ -1,0 +1,21 @@
+name: deepwiki-probe
+on:
+  push:
+    branches:
+      - arena/104bc0f8-tankimini2d
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query DeepWiki MCP
+        run: |
+          set -x
+          curl -sS -X POST https://mcp.deepwiki.com/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"arena","version":"1"}}}'
+          echo "---- tools/list ----"
+          curl -sS -X POST https://mcp.deepwiki.com/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
