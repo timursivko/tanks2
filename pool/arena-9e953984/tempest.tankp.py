@@ -302,7 +302,15 @@ class Brain(TankProgram):
         # сманеврировать. Чем вертлявее враг и дальше дистанция — тем ниже.
         tf = d / o.bullet_speed
         p = exp(-tf / self._jink_period())
-        if p >= self.P_HIT_MIN:
+        # Темп боя решает не меньше точности: пока враг перезаряжается, его
+        # выстрел нам не грозит — это «бесплатный» момент, стреляем охотнее.
+        # Если же враг заряжен, спешить некуда: слабый выстрел только дарит
+        # ему секунду, в которую мы ответить не можем.
+        if enemy.ammo_ready:
+            want = self.P_HIT_MIN * 1.5
+        else:
+            want = self.P_HIT_MIN * 0.6
+        if p >= want:
             return cmd, True
         if enemy.hp <= 4.0 and p >= self.P_HIT_FINISH:
             return cmd, True
@@ -440,17 +448,19 @@ class Brain(TankProgram):
             # И так разминулись: не тратим манёвр на пустой снаряд.
             self.threat = None
             return None
-        if miss < 0.5:
-            # Снаряд летит точно в нас: уходим вбок, используя свою инерцию.
-            px, py = -vy, vx
-            side = 1.0 if px * me.vx + py * me.vy >= 0.0 else -1.0
-            ex, ey = px * side, py * side
+        # Уходим В СТОРОНУ от линии снаряда, а не вдоль неё: поперечный
+        # сдвиг увеличивает промах, а движение к точке сближения — уменьшает.
+        # Сторона — та, куда мы уже смещены от линии; если смещения нет,
+        # берём ту, куда несёт инерция, чтобы не гасить скорость разворотом.
+        perp = dx * (me.y - by) - dy * (me.x - bx)
+        if perp > 2.0:
+            side = 1.0
+        elif perp < -2.0:
+            side = -1.0
         else:
-            # Направление, в котором промах растёт быстрее всего.
-            ex, ey = mx, my
-            n = hypot(ex, ey)
-            ex /= n
-            ey /= n
+            lat = dx * me.vy - dy * me.vx
+            side = 1.0 if lat >= 0.0 else -1.0
+        ex, ey = -dy * side, dx * side
         if o.map.clearance(me.x + ex * 46.0, me.y + ey * 46.0) < 20.0:
             ex, ey = -ex, -ey
         return (ex, ey)
