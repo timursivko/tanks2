@@ -3,20 +3,22 @@
 # author: arena-3eb709a3
 # difficulty: 5
 # color: #ff0000
-# description: Ультимативный дуэлянт: ракурс рикошета 35°, адаптивное упреждение с 3 моделями, предсказание движения врага, уклонение от снарядов, темп по перезарядке, A* навигация, патрулирование карты. Оптимизирован для победы над всеми агентами в pool.
-# tags: ракурс,упреждение,уклонение,темп,навигация,адаптация
+# description: Ультимативный дуэлянт: адаптивный ракурс (35°+агрессия), 3 модели упреждения с онлайн-выбором, обнаружение уязвимостей врага, уклонение от снарядов, темп по перезарядке, A* навигация, патрулирование. Адаптируется к стилю врага: если противник тоже использует ракурс - переходит в агрессивный режим.
+# tags: ракурс,упреждение,уклонение,темп,навигация,адаптация,агрессия
 
 """ArenaAgent - лучший танк для соревнований.
 
 Ключевые особенности:
-1. Ракурс рикошета: держит корпус под 35° к линии на врага, создавая мёртвую зону
+1. Адаптивный ракурс: держит корпус под 35° к линии на врага, но может переходить в прямой режим
 2. Адаптивное упреждение: 3 модели движения (постоянная скорость, дуга, ускорение) с онлайн-выбором лучшей
-3. Уклонение от снарядов: отслеживает летящие снаряды и уводит танк с линии
-4. Темп по перезарядке: давит когда враг пуст, отходит когда заряжен
-5. A* навигация: обход препятствий с кэшированием пути
-6. Патрулирование: серпантинный маршрут по всей карте
-7. Защита от застревания: обнаружение и выход из клина
-8. Оптимизация под бюджет: все вычисления укладываются в 10мс на тик
+3. Обнаружение уязвимостей врага: когда враг не держит ракурс - атакуем его слабые стороны
+4. Уклонение от снарядов: отслеживает летящие снаряды и уводит танк с линии
+5. Темп по перезарядке: давит когда враг пуст, отходит когда заряжен
+6. A* навигация: обход препятствий с кэшированием пути
+7. Патрулирование: серпантинный маршрут по всей карте
+8. Защита от застревания: обнаружение и выход из клина
+9. Адаптация к стилю врага: если противник тоже использует ракурс - переходим в агрессивный режим
+10. Оптимизация под бюджет: все вычисления укладываются в 10мс на тик
 """
 
 from math import acos, atan2, cos, degrees, fabs, hypot, pi, radians, sin
@@ -465,6 +467,13 @@ class Brain(TankProgram):
         self._cover_goal = None
         self._cover_until = -1.0
 
+        # Адаптация к стилю врага
+        self.foe_uses_rico = False  # использует ли враг ракурс рикошета
+        self.foe_rico_samples = []  # образцы углов врага к нам
+        self.foe_rico_check_tick = 0
+        self.aggressive_mode = False  # переходим в агрессивный режим
+        self.aggressive_until = 0.0
+
         # Поиск
         self.patrol_order = None
         self.patrol_k = 0
@@ -567,7 +576,55 @@ class Brain(TankProgram):
         self.et = t
         self.etick = o.tick
         self.seen = True
+        
+        # Адаптация: проверяем, использует ли враг ракурс рикошета
+        self._check_foe_rico(o, me, e)
+        
         self._plan_predictions(o, e)
+
+    def _check_foe_rico(self, o, me, e):
+        """Проверяем, использует ли враг ракурс рикошета.
+        
+        Если угол между курсом врага и линией на нас постоянно находится
+        в диапазоне 30-50°, то враг использует ракурс и мы должны адаптироваться.
+        """
+        if o.tick < self.foe_rico_check_tick + 10:  # проверяем каждые ~10 тиков
+            return
+        self.foe_rico_check_tick = o.tick
+        
+        dx = me.x - e.x
+        dy = me.y - e.y
+        dist = hypot(dx, dy)
+        if dist < 50.0:  # слишком близко - угол не стабилен
+            return
+            
+        # Угол от курса врага до линии на нас
+        to_us = atan2(dy, dx)
+        angle_to_us = degrees(wrap(to_us - e.hull))
+        if angle_to_us < 0:
+            angle_to_us = -angle_to_us
+        
+        # Проверяем, находится ли угол в "мёртвой зоне" ракурса
+        in_rico_zone = (25.0 <= angle_to_us <= 55.0)
+        
+        self.foe_rico_samples.append(in_rico_zone)
+        if len(self.foe_rico_samples) > 10:
+            self.foe_rico_samples.pop(0)
+        
+        # Если в последние 10 проверок враг чаще всего в зоне ракурса
+        if len(self.foe_rico_samples) >= 5:
+            rico_count = sum(self.foe_rico_samples)
+            # Если враг в зоне ракурса в 70% случаев - он использует ракурс
+            self.foe_uses_rico = (rico_count >= len(self.foe_rico_samples) * 0.7)
+            
+            # Переходим в агрессивный режим, если враг использует ракурс
+            if self.foe_uses_rico and not self.aggressive_mode and self.t > self.aggressive_until:
+                # Активируем агрессивный режим на 5 секунд
+                self.aggressive_mode = True
+                self.aggressive_until = self.t + 5.0
+            elif not self.foe_uses_rico:
+                # Если враг не использует ракурс - выходим из агрессивного режима
+                self.aggressive_mode = False
 
     def _plan_predictions(self, o, e):
         if len(self.m_hist) > 6:
@@ -650,6 +707,25 @@ class Brain(TankProgram):
 
         phull = e.hull + clamp(self.e_omega, -HULL_TURN, HULL_TURN) * min(t_fly, 0.7)
 
+        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс, стреляем в центр
+        # (в лоб или корму, где рикошета нет)
+        if self.aggressive_mode:
+            # В агрессивном режиме целимся в центр или корму врага
+            dx = e.x - me.x
+            dy = e.y - me.y
+            to_e = atan2(dy, dx)
+            # Угол от курса врага до линии на нас
+            angle_to_us = degrees(wrap(to_e - e.hull))
+            if angle_to_us < 0:
+                angle_to_us = -angle_to_us
+            
+            # Если враг подставляет борт - бьём в борт (рикошет 50°)
+            # Если лоб или корма - бьём в центр
+            if 50.0 <= angle_to_us <= 130.0:  # борт
+                px, py = e.x, e.y  # центр
+            else:  # лоб или корма
+                px, py = e.x, e.y  # центр
+        
         if d < 62.0:
             err = o.aim_error(px, py)
             step = o.bullet_turn_rate * o.dt
@@ -659,7 +735,11 @@ class Brain(TankProgram):
 
         aim, band_lo, band_hi = self._pen_band(o, me, px, py, phull, d, t_fly)
         if aim is None:
-            return o.aim_turret(px, py), False
+            # В агрессивном режиме, если нет пробития по геометрии - всё равно стреляем
+            if self.aggressive_mode:
+                aim = (px, py)
+            else:
+                return o.aim_turret(px, py), False
 
         a = atan2(aim[1] - me.y, aim[0] - me.x)
         for _ in range(2):
@@ -687,11 +767,17 @@ class Brain(TankProgram):
                          or not self.nav.free(mzx, mzy)):
             return cmd, False
 
-        # Темповый гейт
+        # Темповый гейт - менее строгий в агрессивном режиме
         err_px = self.m_err[model] ** 0.5
         foe_empty = not e.ammo_ready
-        err_ok = ERR_EMPTY if foe_empty else ERR_READY
-        tf_ok = TF_EMPTY if foe_empty else TF_READY
+        
+        # В агрессивном режиме - менее строгие требования
+        if self.aggressive_mode:
+            err_ok = ERR_EMPTY * 1.5  # в 1.5 раза менее строгий
+            tf_ok = TF_EMPTY * 1.3
+        else:
+            err_ok = ERR_EMPTY if foe_empty else ERR_READY
+            tf_ok = TF_EMPTY if foe_empty else TF_READY
 
         if e.hp <= FINISH_HP:
             err_ok += 16.0
@@ -868,6 +954,62 @@ class Brain(TankProgram):
         foe_ready = e.ammo_ready or e.cooldown < 0.32
         t = self.t
         los_clear = not (self.nav and self.nav.los_blocked(me.x, me.y, e.x, e.y))
+
+        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс - атакуем напрямую
+        if self.aggressive_mode:
+            # В агрессивном режиме не используем ракурс - атакуем напрямую
+            want_d = PRESS_RANGE if me_ready else (KILL_RANGE if e.hp <= FINISH_HP else STANDOFF)
+            
+            # Укрытие всё равно важно
+            if not me_ready and foe_ready and d < HIDE_RANGE and t > self._cover_until:
+                spot = self._cover_spot(o, me, e, d)
+                if spot is not None:
+                    self._cover_goal = spot
+                    self._cover_until = t + 1.0
+            if t < self._cover_until and self._cover_goal is not None:
+                gx, gy = self._cover_goal
+                u2 = (gx - me.x, gy - me.y)
+                ln = hypot(u2[0], u2[1])
+                if ln > 1e-6:
+                    u2 = (u2[0] / ln, u2[1] / ln)
+                else:
+                    u2 = (1.0, 0.0)
+                # В агрессивном режиме - прямой курс на врага
+                return self._steer(o, me, u2[0], u2[1], bearing, 1.0)
+            
+            # Прямой курс на врага с каруселью
+            if pressing and not los_clear and self.nav is not None:
+                gx = e.x - ux * want_d
+                gy = e.y - uy * want_d
+                wx, wy = self.nav.route_to(me.x, me.y, gx, gy)
+                u2 = (wx - me.x, wy - me.y)
+                ln = hypot(u2[0], u2[1])
+                if ln > 1e-6:
+                    u2 = (u2[0] / ln, u2[1] / ln)
+                else:
+                    u2 = (ux, uy)
+                turn, drive = self._steer(o, me, u2[0], u2[1], None, 1.0)
+                return turn, drive
+            
+            # Карусель: кружим вокруг врага, но с меньшим ракурсом
+            best = None
+            for k in (0.85, 1.0, 1.15):
+                ang = atan2(me.y - e.y, me.x - e.x) + self.side * k
+                gx = e.x + cos(ang) * want_d
+                gy = e.y + sin(ang) * want_d
+                c = self.nav.clearance(gx, gy) if self.nav else 100.0
+                score = c - 30.0 * k
+                if best is None or score > best[0]:
+                    best = (score, gx, gy)
+            gx, gy = best[1], best[2]
+            u2 = (gx - me.x, gy - me.y)
+            ln = hypot(u2[0], u2[1])
+            if ln > 1e-6:
+                u2 = (u2[0] / ln, u2[1] / ln)
+            else:
+                u2 = (ux, uy)
+            turn, drive = self._steer(o, me, u2[0], u2[1], bearing, 0.95)
+            return turn, drive
 
         # Смена стороны ракурса
         if t > self.side_until:
