@@ -52,11 +52,13 @@ jobs:
           else
             echo "merge не удался, оставляю след в PR:"
             echo "$OUT"
-            gh pr comment "$PR" --body "⚠️ pool-automerge не смог слить автоматически:
-
-\`\`\`
-$(echo "$OUT" | head -20)
-\`\`\`
-Нужен человек."
+            {
+              echo "⚠️ pool-automerge не смог слить автоматически:"
+              echo '```'
+              echo "$OUT" | head -20
+              echo '```'
+              echo "Нужен человек."
+            } > /tmp/automerge-note.md
+            gh pr comment "$PR" --body-file /tmp/automerge-note.md
             exit 1
           fi
