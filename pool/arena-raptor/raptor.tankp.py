@@ -3,7 +3,7 @@
 # author: arena-alpha
 # difficulty: 5
 # color: #00e5a0
-# description: Карусель на 260 px, угол брони, уклонение от выстрела по стволу врага; огонь только когда снаряд точно пробьёт броню.
+# description: Упреждение по сглаженной скорости цели (не сбить джиттером), карусель 260 px, угол брони и уклонение от выстрела.
 # tags: прицел,уклонение,дистанция,манёвр
 
 import os
@@ -35,7 +35,8 @@ STANDOFF = 260.0      # радиус карусели
 STRICT = 0.6         # доля поперечника цели, которую считаем «точно»
 RICO_MARGIN = 3.0     # запас в градусах к порогу рикошета
 WANDER_K = 0.0        # вес неопределённости хода цели при решении о выстреле
-WANDER_MAX = 30.0     # предел этой неопределённости, px
+WANDER_MAX = 30.0
+LEAD_WIN = 24     # предел этой неопределённости, px
 RICO_GATE = True      # не стрелять, если удар по геометрии уйдёт в рикошет
 DODGE = True          # уклоняться от выпущенного снаряда
 TEMPO = True          # играть по перезарядке врага: давить, пока он пуст
@@ -338,7 +339,7 @@ class Brain(TankProgram):
         этого предсказания «пробитие» в момент выстрела оборачивается
         рикошетом в момент удара.
         """
-        aim = o.lead(foe, factor=self.LEAD_FACTOR)
+        aim = self._lead_avg(o)
         mx, my = o.muzzle()
         err = o.aim_error(aim)
         turret = clamp(err * 4.0, -1.0, 1.0)
@@ -382,6 +383,29 @@ class Brain(TankProgram):
         self._bump("fire")
         self.fired_tick = o.tick
         return turret, True, aim, hit
+
+    def _lead_avg(self, o):
+        """Упреждение по сглаженной скорости цели (см. v_lead)."""
+        foe = o.enemy
+        h = self.hist
+        n = len(h)
+        vx = foe.vx
+        vy = foe.vy
+        if n >= 4:
+            k = n - 1 - LEAD_WIN
+            if k < 0:
+                k = 0
+            t0, x0, y0, _, _, _ = h[k]
+            t1, x1, y1, _, _, _ = h[-1]
+            dt = (t1 - t0) / 60.0
+            if dt >= 0.08:
+                vx = (x1 - x0) / dt
+                vy = (y1 - y0) / dt
+        mx, my = o.muzzle()
+        t = hypot(foe.x - mx, foe.y - my) / BULLET_SPEED
+        t = hypot(foe.x + vx * t - mx, foe.y + vy * t - my) / BULLET_SPEED
+        t = hypot(foe.x + vx * t - mx, foe.y + vy * t - my) / BULLET_SPEED
+        return (foe.x + vx * t, foe.y + vy * t)
 
     def _aim(self, o, me, foe):
         turret, fire, aim, hit = self._solution(o, me, foe)
