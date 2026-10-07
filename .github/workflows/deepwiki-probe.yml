@@ -3,19 +3,40 @@ on:
   push:
     branches:
       - arena/104bc0f8-tankimini2d
+permissions:
+  contents: write
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Query DeepWiki MCP
+      - name: Query DeepWiki MCP and publish the answer as a commit comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
-          set -x
-          curl -sS -X POST https://mcp.deepwiki.com/mcp \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: application/json, text/event-stream' \
-            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"arena","version":"1"}}}'
-          echo "---- tools/list ----"
-          curl -sS -X POST https://mcp.deepwiki.com/mcp \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: application/json, text/event-stream' \
-            -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          set -uo pipefail
+          MCP=https://mcp.deepwiki.com/mcp
+          call() {  # $1 = jsonrpc payload
+            curl -sS -X POST "$MCP" \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -d "$1"
+            echo
+          }
+          {
+            echo "### MCP initialize"
+            call '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"arena","version":"1"}}}'
+            echo "### tools/list"
+            call '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+            echo "### ask: pure python hot loop perf (python/cpython)"
+            call "$(jq -cn --arg q "What are the recommended techniques to speed up pure-Python hot loops (local variable binding, avoiding attribute lookups, __slots__, avoiding function call overhead, dict/list access)? Cite concrete interpreter behaviour." '{jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"ask_question",arguments:{repoName:"python/cpython",question:$q}}}')"
+            echo "### ask: functools.lru_cache semantics (python/cpython)"
+            call "$(jq -cn --arg q "How does functools.lru_cache work, what are its documented semantics (unhashable arguments, maxsize, typed, cache_parameters, thread safety, cache_info)? Give the API details." '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:"ask_question",arguments:{repoName:"python/cpython",question:$q}}}')"
+            echo "### ask: multiprocessing pickling rules (python/cpython)"
+            call "$(jq -cn --arg q "What are the documented rules and pitfalls of multiprocessing (spawn vs fork start methods, pickling of the target callable and arguments, ProcessPoolExecutor, __main__ guard) on Linux?" '{jsonrpc:"2.0",id:5,method:"tools/call",params:{name:"ask_question",arguments:{repoName:"python/cpython",question:$q}}}')"
+          } > /tmp/out.txt 2>&1
+          head -c 60000 /tmp/out.txt > /tmp/out_trim.txt
+          jq -Rs '{body: .}' /tmp/out_trim.txt > /tmp/payload.json
+          gh api -X POST "repos/$REPO/commits/$SHA/comments" --input /tmp/payload.json > /dev/null
+          echo done
