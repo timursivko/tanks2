@@ -83,6 +83,10 @@ def _xy(x, y=None):
             x, y = x[0], x[1]
         else:
             x, y = x.x, x.y
+    # float(float) возвращает тот же объект, поэтому для обычного случая
+    # «уже числа» вызовы не нужны: значения те же, тип тот же.
+    if type(x) is float and type(y) is float:
+        return x, y
     return float(x), float(y)
 
 
@@ -128,18 +132,29 @@ class TankView:
     __slots__ = ("x", "y", "hull", "turret", "vx", "vy", "hp", "hp_max",
                  "ammo_ready", "cooldown", "reload")
 
-    def __init__(self, d: dict):
-        self.x = d["x"]
-        self.y = d["y"]
-        self.hull = d["hull"]
-        self.turret = d["turret"]
-        self.vx = d["vx"]
-        self.vy = d["vy"]
-        self.hp = d["hp"]
-        self.hp_max = d["hp_max"]
-        self.ammo_ready = d["ammo_ready"]
-        self.cooldown = d["cooldown"]
-        self.reload = d["reload"]
+    def __init__(self, d):
+        """Принимает словарь (payload из песочницы) или кортеж/список полей.
+
+        Движок в одном процессе передаёт кортеж в том же порядке, что и ключи
+        словаря, — так на тик не строится лишний словарь. JSON превращает
+        кортеж в список, поэтому распаковка списка нужна и для песочницы.
+        """
+        if isinstance(d, dict):
+            self.x = d["x"]
+            self.y = d["y"]
+            self.hull = d["hull"]
+            self.turret = d["turret"]
+            self.vx = d["vx"]
+            self.vy = d["vy"]
+            self.hp = d["hp"]
+            self.hp_max = d["hp_max"]
+            self.ammo_ready = d["ammo_ready"]
+            self.cooldown = d["cooldown"]
+            self.reload = d["reload"]
+        else:
+            self.x, self.y, self.hull, self.turret, self.vx, self.vy, \
+                self.hp, self.hp_max, self.ammo_ready, self.cooldown, \
+                self.reload = d
 
     # --- производные величины ---
 
@@ -215,14 +230,20 @@ class SensorView:
     __slots__ = ("enemy_visible", "in_cone", "in_range", "los_clear", "bumper",
                  "bearing", "distance")
 
-    def __init__(self, d: dict):
-        self.enemy_visible = d.get("enemy_visible", False)
-        self.in_cone = d.get("in_cone", False)
-        self.in_range = d.get("in_range", False)
-        self.los_clear = d.get("los_clear", False)
-        self.bumper = d.get("bumper", False)
-        self.bearing = d.get("bearing")
-        self.distance = d.get("distance")
+    def __init__(self, d):
+        """Словарь из песочницы либо кортеж/список полей (см. TankView)."""
+        if isinstance(d, dict):
+            get = d.get
+            self.enemy_visible = get("enemy_visible", False)
+            self.in_cone = get("in_cone", False)
+            self.in_range = get("in_range", False)
+            self.los_clear = get("los_clear", False)
+            self.bumper = get("bumper", False)
+            self.bearing = get("bearing")
+            self.distance = get("distance")
+        else:
+            self.enemy_visible, self.in_cone, self.in_range, self.los_clear, \
+                self.bumper, self.bearing, self.distance = d
 
     @property
     def bearing_deg(self):
@@ -235,6 +256,9 @@ class SensorView:
 
 class MapView:
     """Карта боя: сетка, проходимость, «зазор» до ближайшей стены."""
+
+    __slots__ = ("tile_size", "width", "height", "pixel_width", "pixel_height",
+                 "rows", "clearance_grid", "spawns")
 
     def __init__(self, payload: dict):
         self.tile_size = payload["tile"]        # размер тайла в пикселях
@@ -256,16 +280,38 @@ class MapView:
 
     def passable(self, x: float, y: float) -> bool:
         """Проезжает ли точка (мировые координаты)."""
-        return self.tile(int(x // self.tile_size), int(y // self.tile_size)) not in "#o:"
+        tile_size = self.tile_size
+        tx = int(x // tile_size)
+        ty = int(y // tile_size)
+        if tx < 0 or ty < 0 or ty >= self.height or tx >= self.width:
+            return False
+        return self.rows[ty][tx] not in "#o:"
 
     def opaque(self, x: float, y: float) -> bool:
-        return self.tile(int(x // self.tile_size), int(y // self.tile_size)) in "#o"
+        tile_size = self.tile_size
+        tx = int(x // tile_size)
+        ty = int(y // tile_size)
+        if tx < 0 or ty < 0 or ty >= self.height or tx >= self.width:
+            return True
+        return self.rows[ty][tx] in "#o"
 
     def clearance(self, x: float, y: float) -> float:
         """Пикселей до ближайшей непроезжей клетки — «свободный коридор»."""
-        tx = min(max(int(x // self.tile_size), 0), self.width - 1)
-        ty = min(max(int(y // self.tile_size), 0), self.height - 1)
-        return self.clearance_grid[ty][tx] * self.tile_size
+        tile_size = self.tile_size
+        tx = int(x // tile_size)
+        ty = int(y // tile_size)
+        # Обычный случай — точка внутри карты: прижимать нечего.
+        if 0 <= tx < self.width and 0 <= ty < self.height:
+            return self.clearance_grid[ty][tx] * tile_size
+        if tx < 0:
+            tx = 0
+        elif tx >= self.width:
+            tx = self.width - 1
+        if ty < 0:
+            ty = 0
+        elif ty >= self.height:
+            ty = self.height - 1
+        return self.clearance_grid[ty][tx] * tile_size
 
     def wall_dir(self, x: float, y: float) -> float:
         """Направление к ближайшей стене в градусах — «куда упираться спиной»."""
@@ -321,14 +367,36 @@ class Action:
                 f"turret={self.turret:.2f}, fire={self.fire})")
 
 
+#: Собраны один раз: float("inf") внутри функции вызывался на каждое число.
+INF_POS = float("inf")
+INF_NEG = float("-inf")
+
+
 def _num(v, default=0.0):
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return default
-    if f != f or f in (float("inf"), float("-inf")):
+    if type(v) is float:
+        f = v
+    else:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return default
+    if f != f or f == INF_POS or f == INF_NEG:
         return default
     return f
+
+
+#: Порядок полей нагрузки движка (``engine.observation.payload`` и
+#: ``engine.observation.payload_tuple``). Быстрый путь ``Observation.__init__``
+#: распаковывает и словарь (по порядку вставки), и кортеж — целиком, поэтому
+#: этот порядок — часть контракта; его проверяет тест
+#: ``tests/test_engine.py::test_engine_payload_field_order``.
+ENGINE_PAYLOAD_FIELDS = ("tick", "time", "dt", "tank", "budget_ms", "me",
+                         "enemy", "bullet_speed", "turret_turn",
+                         "muzzle_offset", "half", "spread", "sight")
+
+#: Метка «SensorView ещё не собран» (см. свойство ``Observation.sight``):
+#: сам объект состояния органов чувств строится лениво.
+_SIGHT_UNBUILT = object()
 
 
 class Observation:
@@ -336,28 +404,116 @@ class Observation:
 
     __slots__ = ("tick", "time", "dt", "tank", "budget_ms", "bullet_speed",
                  "bullet_turn_rate", "muzzle_len", "spread_deg", "me", "enemy",
-                 "sight", "map", "target_half", "_last_seen")
+                 "_sight", "_sight_raw", "map", "target_half", "_ls")
 
-    def __init__(self, payload: dict, mapview: MapView | None):
-        self.tick = payload["tick"]
-        self.time = payload["time"]
-        self.dt = payload["dt"]
-        self.tank = payload["tank"]
-        self.budget_ms = payload["budget_ms"]
-        self.bullet_speed = float(payload.get("bullet_speed", 620.0))
-        self.bullet_turn_rate = float(payload.get("turret_turn", 3.6))
-        self.muzzle_len = float(payload.get("muzzle_offset", MUZZLE_LEN))
-        self.spread_deg = float(payload.get("spread", 0.0))
-        half = payload.get("half") or (TARGET_HALF_LEN, TARGET_HALF_WID)
-        self.target_half = (float(half[0]), float(half[1]))
-        self.me = TankView(payload["me"])
-        self.enemy = TankView(payload["enemy"]) if payload.get("enemy") else None
-        self.sight = SensorView(payload["sight"])
+    def __init__(self, payload, mapview: MapView | None):
+        if type(payload) is tuple:
+            # Самый короткий путь: движок собрал наблюдение кортежем в
+            # порядке ENGINE_PAYLOAD_FIELDS (см. build_both) — значения уже
+            # нужных типов, поэтому ни словаря, ни get(), ни float().
+            (self.tick, self.time, self.dt, self.tank, self.budget_ms,
+             me_payload, enemy, self.bullet_speed, self.bullet_turn_rate,
+             self.muzzle_len, self.target_half, self.spread_deg,
+             sight) = payload
+            self.me = TankView(me_payload)
+            self.enemy = TankView(enemy) if enemy is not None else None
+            self._sight_raw = sight
+            self._sight = _SIGHT_UNBUILT
+            self.map = mapview
+            self._ls = None
+            return
+        me_payload = payload["me"]
+        if type(me_payload) is tuple:
+            # Payload движка словарём (не через JSON): ключи все на месте, а
+            # значения уже нужных типов, поэтому ни get(), ни float() не
+            # нужны. Признак — кортеж в "me": песочница отдаёт список после
+            # JSON, а engine.observation собирает кортеж (см. TankView).
+            # Значения берутся одним проходом по словарю (порядок вставки —
+            # см. ENGINE_PAYLOAD_FIELDS): это дешевле, чем 13 обращений по
+            # ключу на каждый танк каждый тик.
+            (self.tick, self.time, self.dt, self.tank, self.budget_ms,
+             me_payload, enemy, self.bullet_speed, self.bullet_turn_rate,
+             self.muzzle_len, self.target_half, self.spread_deg,
+             sight) = payload.values()
+            self.me = TankView(me_payload)
+            self.enemy = TankView(enemy) if enemy is not None else None
+        else:
+            get = payload.get
+            self.tick = payload["tick"]
+            self.time = payload["time"]
+            self.dt = payload["dt"]
+            self.tank = payload["tank"]
+            self.budget_ms = payload["budget_ms"]
+            # Значения наблюдения — уже float (движок кладёт готовые числа),
+            # поэтому float() вызывается только для «чужих» payload'ов: в том
+            # числе тех, что пришли из песочницы через JSON.
+            value = get("bullet_speed", 620.0)
+            self.bullet_speed = value if type(value) is float else float(value)
+            value = get("turret_turn", 3.6)
+            self.bullet_turn_rate = value if type(value) is float else float(value)
+            value = get("muzzle_offset", MUZZLE_LEN)
+            self.muzzle_len = value if type(value) is float else float(value)
+            value = get("spread", 0.0)
+            self.spread_deg = value if type(value) is float else float(value)
+            half = get("half") or (TARGET_HALF_LEN, TARGET_HALF_WID)
+            hx = half[0]
+            hy = half[1]
+            self.target_half = ((hx, hy) if (type(hx) is float and type(hy) is float)
+                                else (float(hx), float(hy)))
+            self.me = TankView(me_payload)
+            enemy = get("enemy")
+            self.enemy = TankView(enemy) if enemy else None
+            sight = payload["sight"]
+        # Состояние органов чувств собирается при первом обращении: ни одна
+        # программа в ai/ его не читает, а SensorView — это объект и семь
+        # присваиваний на каждый танк каждый тик.
+        self._sight_raw = sight
+        self._sight = _SIGHT_UNBUILT
         self.map = mapview
         # Куда башня была направлена, когда цель была видна в последний
         # раз: башня доезжает до этой точки и стоит, вместо меандра.
-        self._last_seen = Point(self.me.x + math.cos(self.me.turret) * self.muzzle_len,
-                                self.me.y + math.sin(self.me.turret) * self.muzzle_len)
+        # Точка считается лениво (см. свойство ниже): она нужна только
+        # тем программам, которые целятся «по памяти».
+        self._ls = None
+
+    @property
+    def sight(self):
+        """Состояние органов чувств: `SensorView`, собранный при первом чтении.
+
+        Программы, которые «видят» противника по ``o.enemy``, это поле не
+        трогают — а его сборка стоит объекта и семи присваиваний на каждый
+        танк каждый тик. Значения те же: объект собирается ровно один раз из
+        того же кортежа (или словаря), что и раньше.
+        """
+        s = self._sight
+        if s is _SIGHT_UNBUILT:
+            s = self._sight = SensorView(self._sight_raw)
+        return s
+
+    @sight.setter
+    def sight(self, value) -> None:
+        # Присваивание поля скриптом остаётся возможным, как и раньше.
+        self._sight = value
+
+    @property
+    def _last_seen(self) -> Point:
+        """Последняя точка наведения башни — та же, что считалась в __init__.
+
+        Значение производное от ``me`` и ``muzzle_len`` и до первого
+        обращения не меняется, поэтому считается один раз при чтении.
+        """
+        p = self._ls
+        if p is None:
+            me = self.me
+            turret = me.turret
+            muzzle_len = self.muzzle_len
+            p = self._ls = Point(me.x + math.cos(turret) * muzzle_len,
+                                 me.y + math.sin(turret) * muzzle_len)
+        return p
+
+    @_last_seen.setter
+    def _last_seen(self, value) -> None:
+        self._ls = value
 
     # --- часто нужные величины ---
 
@@ -404,15 +560,33 @@ class Observation:
         в упор — 3 попадания), но гасить его масштабированием нельзя:
         попытка ограничить смещение ломала все скрипты сразу.
         """
-        x, y = _xy(target)
         vx = getattr(target, "vx", 0.0)
         vy = getattr(target, "vy", 0.0)
         speed = max(1.0, self.bullet_speed)
-        t = self.bullet_time_to(x, y) + extra
-        for _ in range(2):
-            x, y = _xy(target)
-            t = self.bullet_time_to(x + vx * t * factor,
-                                    y + vy * t * factor) + extra
+        # Ствол за время расчёта не двигается, поэтому его позиция и делитель
+        # скорости считаются один раз на все три итерации (те же числа, что
+        # давал bullet_time_to, — просто без повторного muzzle()).
+        me = self.me
+        turret = me.turret
+        muzzle_len = self.muzzle_len
+        mx = me.x + math.cos(turret) * muzzle_len
+        my = me.y + math.sin(turret) * muzzle_len
+        # Координаты цели за время расчёта не меняются: приводим их к паре
+        # чисел один раз, а не на каждой из трёх итераций (см. ``_xy``).
+        if isinstance(target, (tuple, list)):
+            x, y = target[0], target[1]
+        else:
+            x, y = target.x, target.y
+        if type(x) is not float or type(y) is not float:
+            x = float(x)
+            y = float(y)
+        t = math.hypot(x - mx, y - my) / speed + extra
+        # Две итерации уточнения развёрнуты: счётчик цикла на этом горячем
+        # пути не нужен, а числа те же.
+        t = math.hypot(x + vx * t * factor - mx,
+                       y + vy * t * factor - my) / speed + extra
+        t = math.hypot(x + vx * t * factor - mx,
+                       y + vy * t * factor - my) / speed + extra
         return (x + vx * t * factor, y + vy * t * factor)
 
     def bullet_time_to(self, x, y) -> float:
@@ -445,19 +619,27 @@ class Observation:
         подруливает в сторону, где свободнее, и соскальзывает вдоль стены.
         ``avoid=False`` — голый курс на цель.
         """
-        x, y = _xy(x, y)
-        d = math.hypot(x - self.me.x, y - self.me.y)
+        if y is None:
+            x, y = _xy(x, y)
+        elif type(x) is not float or type(y) is not float:
+            x = float(x)
+            y = float(y)
+        me = self.me
+        me_x = me.x
+        me_y = me.y
+        d = math.hypot(x - me_x, y - me_y)
         if d < 1e-6:
             return 0.0, 0.0
-        want = math.atan2(y - self.me.y, x - self.me.x)
-        err = wrap(want - self.me.hull)
+        want = math.atan2(y - me_y, x - me_x)
+        err = wrap(want - me.hull)
         turn = err * 2.0
         if avoid and self.map is not None and d > tol:
             turn = self._slide_off_walls(turn)
         turn = clamp(turn, -1.0, 1.0)
-        if abs(err) > 1.9:            # цель строго за кормой — едем назад
+        abs_err = err if err >= 0.0 else -err
+        if abs_err > 1.9:            # цель строго за кормой — едем назад
             drive = -0.7
-        elif abs(err) > 1.2:
+        elif abs_err > 1.2:
             drive = 0.25 if not reverse else -0.5
         else:
             drive = 0.0 if d < tol else (1.0 if not reverse else -0.6)
@@ -512,13 +694,29 @@ class Observation:
         Ошибка берётся от центра танка, поэтому башня реально
         прицеливается, а не просто поворачивается «в сторону цели».
         """
-        x, y = _xy(x, y)
-        a = self.me.turret
-        for _ in range(3):
-            mx = self.me.x + math.cos(a) * self.muzzle_len
-            my = self.me.y + math.sin(a) * self.muzzle_len
-            a = math.atan2(y - my, x - mx)
-        return wrap(a - self.me.turret)
+        if y is None:
+            x, y = _xy(x, y)
+        elif type(x) is not float or type(y) is not float:
+            x = float(x)
+            y = float(y)
+        me = self.me
+        me_x = me.x
+        me_y = me.y
+        turret = me.turret
+        muzzle_len = self.muzzle_len
+        # Те же три итерации, что и раньше, только развёрнутые: счётчик цикла
+        # на этом горячем пути (башня доворачивается каждый тик) лишний.
+        a = turret
+        mx = me_x + math.cos(a) * muzzle_len
+        my = me_y + math.sin(a) * muzzle_len
+        a = math.atan2(y - my, x - mx)
+        mx = me_x + math.cos(a) * muzzle_len
+        my = me_y + math.sin(a) * muzzle_len
+        a = math.atan2(y - my, x - mx)
+        mx = me_x + math.cos(a) * muzzle_len
+        my = me_y + math.sin(a) * muzzle_len
+        a = math.atan2(y - my, x - mx)
+        return wrap(a - turret)
 
     def aim_and_fire(self, target=None, strict: float = 0.55,
                      factor: float = 1.0):
@@ -542,15 +740,18 @@ class Observation:
         # Запоминаем, куда целиться: если противник спрячется, башня
         # доедет до этой точки и остановится, а не будет крутить меандр.
         self._last_seen = Point(*aim)
-        turret = self.aim_turret(aim)
+        # aim_turret(aim) — это clamp(err * 4): ошибка считается один раз,
+        # а не дважды (внутри aim_turret и здесь), значения те же.
         err = self.aim_error(aim)
+        turret = clamp(err * 4.0, -1.0, 1.0)
         # Ствол выстрелит уже после поворота башни в этом тике, поэтому
         # считаем остаточную ошибку после доворота, а не текущую:
         # turret = clamp(err * 4) повёрнет башню ровно на turret * turn.
         residual = abs(err - turret * self.bullet_turn_rate * self.dt)
-        d = math.hypot(target_x - self.me.x, target_y - self.me.y)
+        me = self.me
+        d = math.hypot(target_x - me.x, target_y - me.y)
         tol = self.hit_tolerance(d, strict)
-        return turret, residual < tol and self.me.ammo_ready
+        return turret, residual < tol and me.ammo_ready
 
     def hit_tolerance(self, dist: float, strict: float = 0.55) -> float:
         """Допуск наведения в радианах, при котором снаряд попадёт в цель.

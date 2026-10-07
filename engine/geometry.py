@@ -146,39 +146,101 @@ def obb_aabb(cx: float, cy: float, half, angle: float) -> tuple[float, float, fl
 
 
 def resolve_obb_aabb(cx: float, cy: float, half, angle: float,
-                     ax0: float, ay0: float, ax1: float, ay1: float) -> tuple[float, float, float] | None:
+                     ax0: float, ay0: float, ax1: float, ay1: float,
+                     pre: tuple[float, float, float, float] | None = None,
+                     ca: float = None, sa: float = None) -> tuple[float, float, float] | None:
     """Выталкивание повёрнутого прямоугольника из AABB (SAT по 4 осям).
 
     Возвращает ``(depth, nx, ny)`` — минимальное смещение, которое убирает
     пересечение, либо ``None``, если пересечения нет.
+
+    ``pre`` — заранее посчитанные радиусы проекций корпуса на те же 4 оси
+    (``obb_axis_radii``): они зависят только от габаритов и курса, поэтому
+    при переборе плиток в ``push_out`` их не нужно считать заново. Порядок
+    осей, формулы и сравнения оставлены прежними — ответы те же.
     """
-    ca = math.cos(angle)
-    sa = math.sin(angle)
-    axes = ((1.0, 0.0), (0.0, 1.0), (ca, sa), (-sa, ca))
+    if ca is None:
+        ca = math.cos(angle)
+    if sa is None:
+        sa = math.sin(angle)
     tcx = (ax0 + ax1) * 0.5
     tcy = (ay0 + ay1) * 0.5
     thx = (ax1 - ax0) * 0.5
     thy = (ay1 - ay0) * 0.5
     dx = cx - tcx
     dy = cy - tcy
+    if pre is None:
+        pre = obb_axis_radii(half, ca, sa)
+    r1, r2, r3, r4 = pre
 
     best = INF
     bnx = 0.0
     bny = 0.0
-    for ux, uy in axes:
-        r_a = half[0] * abs(ca * ux + sa * uy) + half[1] * abs(-sa * ux + ca * uy)
-        r_b = thx * abs(ux) + thy * abs(uy)
-        proj = dx * ux + dy * uy
-        overlap = (r_a + r_b) - abs(proj)
-        if overlap <= 0.0:
-            return None
-        if overlap < best:
-            best = overlap
-            if proj > 0:
-                bnx, bny = ux, uy
-            else:
-                bnx, bny = -ux, -uy
+
+    # ось (1, 0)
+    overlap = (r1 + thx) - abs(dx)
+    if overlap <= 0.0:
+        return None
+    if overlap < best:
+        best = overlap
+        if dx > 0:
+            bnx, bny = 1.0, 0.0
+        else:
+            bnx, bny = -1.0, 0.0
+
+    # ось (0, 1)
+    overlap = (r2 + thy) - abs(dy)
+    if overlap <= 0.0:
+        return None
+    if overlap < best:
+        best = overlap
+        if dy > 0:
+            bnx, bny = 0.0, 1.0
+        else:
+            bnx, bny = 0.0, -1.0
+
+    # ось (ca, sa) — локальная ось корпуса
+    aca = abs(ca)
+    asa = abs(sa)
+    proj = dx * ca + dy * sa
+    overlap = (r3 + thx * aca + thy * asa) - abs(proj)
+    if overlap <= 0.0:
+        return None
+    if overlap < best:
+        best = overlap
+        if proj > 0:
+            bnx, bny = ca, sa
+        else:
+            bnx, bny = -ca, -sa
+
+    # ось (-sa, ca)
+    proj = dx * -sa + dy * ca
+    overlap = (r4 + thx * asa + thy * aca) - abs(proj)
+    if overlap <= 0.0:
+        return None
+    if overlap < best:
+        best = overlap
+        if proj > 0:
+            bnx, bny = -sa, ca
+        else:
+            bnx, bny = sa, -ca
+
     return best, bnx, bny
+
+
+def obb_axis_radii(half, ca: float, sa: float) -> tuple[float, float, float, float]:
+    """Радиусы проекции OBB на 4 оси SAT: (1,0), (0,1), (ca,sa), (-sa,ca).
+
+    Те же выражения, что считал цикл внутри ``resolve_obb_aabb``, только
+    вынесены наружу: за одно выталкивание угол и полуразмеры корпуса не
+    меняются, а плиток перебирается несколько.
+    """
+    hx, hy = half
+    r1 = hx * abs(ca) + hy * abs(-sa)
+    r2 = hx * abs(sa) + hy * abs(ca)
+    r3 = hx * abs(ca * ca + sa * sa) + hy * abs(-sa * ca + ca * sa)
+    r4 = hx * abs(ca * -sa + sa * ca) + hy * abs(-sa * -sa + ca * ca)
+    return r1, r2, r3, r4
 
 
 def ray_circle(ox: float, oy: float, dx: float, dy: float,

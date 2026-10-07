@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from config import Balance
 from engine.action import Action
-from engine.geometry import clamp, wrap_angle
+from engine.geometry import TAU, clamp
 from engine.grid import Arena, push_out
 
 
@@ -98,7 +98,11 @@ class Tank:
     def step(self, cmd: Action, dt: float, arena: Arena, bal: Balance) -> bool:
         """Интегрирует тик. Возвращает True, если было столкновение со стеной."""
         # 1. Башня.
-        self.turret = wrap_angle(self.turret + cmd.turret * bal.turret_turn * dt)
+        angle = self.turret + cmd.turret * bal.turret_turn * dt
+        angle = math.fmod(angle + math.pi, TAU)
+        if angle < 0:
+            angle += TAU
+        self.turret = angle - math.pi
 
         # 2. Гусеницы. Тяга и руление задают скорости левого и правого трака,
         #    а из них уже следуют и поступательная скорость, и угловая:
@@ -112,7 +116,9 @@ class Tank:
         #    штрафом turn_speed_penalty, из-за чего поворот ощущался вялым.
         left = cmd.drive + cmd.turn
         right = cmd.drive - cmd.turn
-        span = max(abs(left), abs(right))
+        a_left = abs(left)
+        a_right = abs(right)
+        span = a_left if a_left > a_right else a_right
         if span > 1.0:                    # иначе газ с рулением уходит в дрейф
             left /= span
             right /= span
@@ -121,58 +127,89 @@ class Tank:
         # в передний: S вёс танк вперёд, а отступление ИИ упиралось в противника.
         drive = (left + right) * 0.5
         want = drive * (bal.speed_fwd if drive >= 0 else bal.speed_rev)
-        want *= arena.speed_factor(self.x, self.y)
-        self.hull = wrap_angle(
-            self.hull + (left - right) * 0.5 * bal.hull_turn * dt)
-        fx, fy = self.forward
-        tvx, tvy = fx * want, fy * want
+        # Грязь есть далеко не на каждой карте: если её нет вовсе, множитель
+        # равен ровно 1.0 (так отвечает и speed_factor вне грязевых тайлов), и
+        # считать тайл под танком каждый тик незачем.
+        if arena.has_mud:
+            want *= arena.speed_factor(self.x, self.y)
+        angle = self.hull + (left - right) * 0.5 * bal.hull_turn * dt
+        angle = math.fmod(angle + math.pi, TAU)
+        if angle < 0:
+            angle += TAU
+        self.hull = angle - math.pi
+        fx = math.cos(self.hull)
+        fy = math.sin(self.hull)
+        tvx = fx * want
+        tvy = fy * want
 
         # 3. Разгон/торможение по вектору скорости.
         rate = bal.accel if (abs(want) > 1e-6) else bal.decel
-        dvx, dvy = tvx - self.vx, tvy - self.vy
+        dvx = tvx - self.vx
+        dvy = tvy - self.vy
         dlen = math.hypot(dvx, dvy)
-        if dlen > rate * dt:
-            dvx, dvy = dvx * (rate * dt / dlen), dvy * (rate * dt / dlen)
-        self.vx += dvx
-        self.vy += dvy
+        limit = rate * dt
+        if dlen > limit:
+            k = limit / dlen
+            dvx *= k
+            dvy *= k
+        vx = self.vx + dvx
+        vy = self.vy + dvy
         # Модуль скорости не может превысить максимум: иначе при резком
         # развороте корпуса инерция уводит танк дальше цели и он едет «назад».
-        sp = math.hypot(self.vx, self.vy)
-        if sp > bal.speed_fwd:
-            k = bal.speed_fwd / sp
-            self.vx *= k
-            self.vy *= k
+        sp = math.hypot(vx, vy)
+        fwd = bal.speed_fwd
+        if sp > fwd:
+            k = fwd / sp
+            vx *= k
+            vy *= k
+        self.vx = vx
+        self.vy = vy
 
         # 4. Перемещение и расталкивание стенами.
-        self.x += self.vx * dt
-        self.y += self.vy * dt
+        x = self.x + vx * dt
+        y = self.y + vy * dt
         # Границы карты жёсткие: за периметр не выезжаем ни при какой расталкировке.
-        pad = max(self.half_size) + 1.0
-        lo_x, hi_x = pad, arena.pixel_width - pad
-        lo_y, hi_y = pad, arena.pixel_height - pad
-        if not lo_x <= self.x <= hi_x:
-            self.x = lo_x if self.x < lo_x else hi_x
+        half = self.half_size
+        hx, hy = half
+        pad = (hx if hx > hy else hy) + 1.0
+        lo_x = pad
+        hi_x = arena.pixel_width - pad
+        lo_y = pad
+        hi_y = arena.pixel_height - pad
+        if x < lo_x or x > hi_x:
+            x = lo_x if x < lo_x else hi_x
             self.vx = 0.0
-        if not lo_y <= self.y <= hi_y:
-            self.y = lo_y if self.y < lo_y else hi_y
+            vx = 0.0
+        if y < lo_y or y > hi_y:
+            y = lo_y if y < lo_y else hi_y
             self.vy = 0.0
+            vy = 0.0
 
-        nx, ny, hit = push_out(arena, self.x, self.y, self.half_size, self.hull)
+        # cos/sin курса уже посчитаны выше (fx, fy): push_out берёт их
+        # готовыми, значения те же — угол тот же самый.
+        nx, ny, hit = push_out(arena, x, y, half, self.hull, ca=fx, sa=fy)
         if hit:
-            cx, cy = nx - self.x, ny - self.y
+            cx = nx - x
+            cy = ny - y
             nlen = math.hypot(cx, cy)
             if nlen > 1e-9:
-                ux, uy = cx / nlen, cy / nlen
+                ux = cx / nlen
+                uy = cy / nlen
                 dot = self.vx * ux + self.vy * uy
                 if dot < 0:
                     # Гасим компоненту скорости, направленную в стену.
                     self.vx -= ux * dot
                     self.vy -= uy * dot
-            self.x, self.y = nx, ny
+            x = nx
+            y = ny
+        self.x = x
+        self.y = y
 
         # 5. Перезарядка и пауза после тарана.
-        self.cooldown = max(0.0, self.cooldown - dt) if self.cooldown > 1e-6 else 0.0
-        self.ram_cd = max(0.0, self.ram_cd - dt) if self.ram_cd > 1e-6 else 0.0
+        cooldown = self.cooldown
+        self.cooldown = max(0.0, cooldown - dt) if cooldown > 1e-6 else 0.0
+        ram_cd = self.ram_cd
+        self.ram_cd = max(0.0, ram_cd - dt) if ram_cd > 1e-6 else 0.0
         return hit
 
     # --- урон ---------------------------------------------------------------

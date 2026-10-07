@@ -10,6 +10,25 @@ FORWARD = "forward"
 REVERSE = "reverse"
 STOP = "stop"
 
+#: Границы диапазона и «нечисла» для проверки в одном месте: собрать их
+#: внутри функции дешевле не выйдет — float("inf") вызывается каждый раз.
+INF_POS = float("inf")
+INF_NEG = float("-inf")
+
+
+def num(v, default=0.0) -> float:
+    """Число из чего угодно: float, int, строка. Мусор и nan/inf — default."""
+    if type(v) is float:
+        f = v
+    else:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return default
+    if f != f or f == INF_POS or f == INF_NEG:
+        return default
+    return f
+
 
 @dataclass
 class Action:
@@ -37,35 +56,39 @@ class Action:
             return Action()
         if isinstance(raw, (tuple, list)):
             vals = list(raw) + [0.0] * (4 - len(raw))
-            raw = Action(vals[0], vals[1], vals[2], bool(vals[3]))
-        elif isinstance(raw, dict):
-            raw = Action(
+            return Action(vals[0], vals[1], vals[2], bool(vals[3]))
+        if isinstance(raw, dict):
+            return Action(
                 drive=raw.get("drive", raw.get("d", 0.0)),
                 turn=raw.get("turn", raw.get("t", 0.0)),
                 turret=raw.get("turret", raw.get("u", 0.0)),
                 fire=raw.get("fire", raw.get("f", False)),
             )
-        elif all(hasattr(raw, a) for a in ("drive", "turn", "turret", "fire")):
-            # Любой похожий объект (в том числе Action из SDK tankp).
-            pass
+        # Любой похожий объект (в том числе Action из SDK tankp): четыре
+        # обращения к атрибутам вместо all(hasattr(...)) — тот же ответ,
+        # но без генератора и четырёх отдельных hasattr на команду.
+        try:
+            drive = raw.drive
+            turn = raw.turn
+            turret = raw.turret
+            fire = raw.fire
+        except AttributeError:
+            return Action()
+        # Обычный случай — скрипт уже отдал нормальные float в диапазоне:
+        # тогда num() и clamp() не нужны, но ответ тот же самый.
+        if type(drive) is float and -1.0 <= drive <= 1.0:
+            d = drive
         else:
-            raw = Action()
-
-        def num(v, default=0.0) -> float:
-            try:
-                f = float(v)
-            except (TypeError, ValueError):
-                return default
-            if f != f or f in (float("inf"), float("-inf")):
-                return default
-            return f
-
-        return Action(
-            drive=clamp(num(raw.drive), -1.0, 1.0),
-            turn=clamp(num(raw.turn), -1.0, 1.0),
-            turret=clamp(num(raw.turret), -1.0, 1.0),
-            fire=bool(raw.fire),
-        )
+            d = clamp(num(drive), -1.0, 1.0)
+        if type(turn) is float and -1.0 <= turn <= 1.0:
+            t = turn
+        else:
+            t = clamp(num(turn), -1.0, 1.0)
+        if type(turret) is float and -1.0 <= turret <= 1.0:
+            u = turret
+        else:
+            u = clamp(num(turret), -1.0, 1.0)
+        return Action(d, t, u, bool(fire))
 
     @staticmethod
     def from_dict(d: dict) -> "Action":
