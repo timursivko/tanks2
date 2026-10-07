@@ -905,15 +905,32 @@ class Brain(TankProgram):
 
     # --- Угроза ---
     def _threat(self, o, e, me):
+        """Обнаружение угрозы от летящего снаряда врага.
+        
+        Улучшенная логика: более точное предсказание траектории снаряда,
+        лучшее определение стороны уклонения, учёт движения врага.
+        """
         if e is not None:
             cd = e.cooldown
+            # Обнаружение выстрела: если враг был заряжен на прошлом тике и теперь в перезарядке
             jumped = self.prev_cd is not None and self.prev_cd < 0.45 and cd > 0.6
             blind = self.prev_cd is None and cd > 0.55
+            
             if jumped or blind:
+                # Снаряд летит из ствола врага в направлении его башни
                 a = e.turret
                 age = 0.0 if jumped else (RELOAD - cd)
                 self.threat = (e.x + cos(a) * MUZZLE, e.y + sin(a) * MUZZLE,
                                cos(a), sin(a), self.t - age)
+            
+            # Обнаружение подготовки к выстрелу: если враг навел башню на нас
+            if e.ammo_ready:
+                bearing_to_us = atan2(me.y - e.y, me.x - e.x)
+                turret_error = fabs(wrap(bearing_to_us - e.turret))
+                if turret_error < radians(5.0):  # башня наведена на нас
+                    # Враг может выстрелить в любой момент - готовимся к уклонению
+                    self.threat_hot = True
+            
             self.prev_cd = cd
             self.prev_enemy = (e.x, e.y, e.turret, e.ammo_ready, o.tick)
         else:
@@ -927,43 +944,66 @@ class Brain(TankProgram):
         if age > 1.6:
             self.threat = None
             return None
+        
+        # Текущая позиция снаряда
         bx += dx * BULLET_SPEED * age
         by += dy * BULLET_SPEED * age
+        
+        # Вектор от нас до снаряда
         rx = bx - me.x
         ry = by - me.y
+        
+        # Относительная скорость (скорость снаряда минус наша скорость)
         vx = dx * BULLET_SPEED - me.vx
         vy = dy * BULLET_SPEED - me.vy
         vv = vx * vx + vy * vy
+        
         if vv < 1.0:
             self.threat = None
             return None
+        
+        # Время до минимального сближения
         t_star = -(rx * vx + ry * vy) / vv
         if t_star <= 0.0:
             self.threat = None
             return None
+        
+        # Минимальное расстояние (мисс-дистанция)
         miss = hypot(rx + vx * t_star, ry + vy * t_star)
+        
+        # Порог уклонения: если снаряд пройдет рядом - уходим
         lim = DODGE_MISS + 18.0 if self.threat_hot else DODGE_MISS
         if miss > lim:
             self.threat = None
             self.threat_hot = False
             return None
+        
+        # Определяем сторону уклонения: вбок от линии полёта снаряда
         perp = dx * (me.y - by) - dy * (me.x - bx)
         if perp > 2.0:
             side = 1.0
         elif perp < -2.0:
             side = -1.0
         else:
+            # Если снаряд летит прямо на нас - уходим в сторону, где у нас больше пространства
             lat = dx * me.vy - dy * me.vx
             side = 1.0 if lat >= 0.0 else -1.0
+        
+        # Проверяем, нет ли стены в выбранной стороне
         ex, ey = -dy * side, dx * side
         if self.nav and self.nav.clearance(me.x + ex * DODGE_CLEAR,
                                            me.y + ey * DODGE_CLEAR) < 20.0:
+            # Смена стороны если нет пространства
             ex, ey = -ex, -ey
+            side = -side
+        
+        # Уклонение: не только вбок, но и немного назад/вперёд для лучшего манёвра
         ux, uy = (ex - dx * 0.35), (ey - dy * 0.35)
         ln = hypot(ux, uy)
         if ln > 1e-6:
             ux /= ln
             uy /= ln
+        
         self.threat_hot = True
         return (ux, uy, t_star, miss, dx, dy)
 
@@ -1194,41 +1234,75 @@ class Brain(TankProgram):
         return clamp(wrap(best_a - me.hull) * 2.0, -1.0, 1.0)
 
     def _dodge_move(self, o, me, e, threat):
+        """Уклонение от летящего снаряда.
+        
+        Стратегия: уводим танк с линии полёта снаряда, сохраняя ракурс защиты.
+        """
         ux, uy, t_star, miss, bdx, bdy = threat
+        
+        # Определяем направление откуда летит снаряд
+        bullet_dir = atan2(bdy, bdx)
+        
+        # Если снаряд очень близко и летит прямо на нас - экстренное уклонение
+        if miss < 13.0 and t_star > 0.28:
+            # Снаряд почти попадает - максимальный манёвр
+            err = wrap(atan2(uy, ux) - me.hull)
+            return clamp(err * 2.6, -1.0, 1.0), 1.0
+        
+        # Стандартное уклонение: держим угол ракурса к линии снаряда
+        # Это защищает от рикошета если снаряд всё же попадёт
         base = atan2(-bdy, -bdx) + self.side * ANGLE_LOCK
         hx, hy = cos(base), sin(base)
         dot = ux * hx + uy * hy
-        if miss < 13.0 and t_star > 0.28 and fabs(dot) < 0.45:
-            err = wrap(atan2(uy, ux) - me.hull)
-            return clamp(err * 2.6, -1.0, 1.0), 1.0
+        
         err = wrap(base - me.hull)
         turn = clamp(err * TRACK_GAIN, -1.0, 1.0)
         gear = 1.0 if dot >= 0.0 else -1.0
+        
+        # Проверяем пространство для манёвра
         if self.nav is not None:
             px = me.x + ux * DODGE_CLEAR
             py = me.y + uy * DODGE_CLEAR
             if self.nav.clearance(px, py) < 18.0:
+                # Нет пространства - экстренный разворот
                 err = wrap(atan2(uy, ux) - me.hull)
                 return clamp(err * 2.6, -1.0, 1.0), 1.0
+        
         return turn, gear * 1.0
 
     def _cover_spot(self, o, me, e, d):
+        """Поиск точки укрытия, где линия огня врага нас не видит.
+        
+        Улучшенная логика: ищем точки ближе к врагу для быстрого возврата в бой.
+        """
         best = None
         nav = self.nav
         if nav is None:
             return None
-        for k in range(14):
-            ang = k * (TAU / 14) + 0.2
-            for dist in (90.0, 170.0, 260.0):
+        
+        # Ищем укрытия на разных дистанциях
+        for dist in (80.0, 140.0, 200.0):
+            # Проверяем больше направлений
+            for k in range(20):
+                ang = k * (TAU / 20) + 0.1
                 px = me.x + cos(ang) * dist
                 py = me.y + sin(ang) * dist
                 if not nav.free(px, py) or nav.clearance(px, py) < 26.0:
                     continue
                 if not nav.los_blocked(px, py, e.x, e.y):
                     continue
-                score = -dist + nav.clearance(px, py) * 0.5
+                
+                # Оценка: предпочитаем ближние точки с хорошим обзором
+                # и возможностью быстрого возврата в бой
+                angle_to_enemy = atan2(e.y - py, e.x - px)
+                bearing = atan2(e.y - me.y, e.x - me.x)
+                angle_diff = fabs(wrap(angle_to_enemy - bearing))
+                
+                # Score: ближе + больше пространства + лучше позиция для возврата
+                score = -dist * 0.5 + nav.clearance(px, py) * 0.3 - angle_diff * 50.0
                 if best is None or score > best[0]:
                     best = (score, px, py)
+        
         return None if best is None else (best[1], best[2])
 
     # --- Поиск ---
