@@ -509,3 +509,49 @@ def test_engine_payload_field_order() -> None:
     w = World.create(load_map("arena"), BALANCE, seed=1)
     payload = build_observation(w, 0, BALANCE.default_budget_ms)
     assert tuple(payload) == tankp.ENGINE_PAYLOAD_FIELDS
+
+def test_engine_tuple_payload_matches_dict() -> None:
+    """Кортежная нагрузка (``build_both``) — то же наблюдение, что словарная.
+
+    Горячий путь ``tools/matrix.py`` получает наблюдения кортежем (см.
+    ``payload_tuple``), а сервер и песочница — словарём (``build_observation``).
+    Оба обязаны давать SDK одно и то же: сверяем все поля, включая видимость
+    противника и оба представления танков.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    sdk = _Path(__file__).resolve().parents[1] / "engine" / "sdk"
+    if str(sdk) not in _sys.path:
+        _sys.path.insert(0, str(sdk))
+    import tankp
+
+    from engine.observation import build_both, build_observation
+
+    w = World.create(load_map("arena"), BALANCE, seed=1)
+    a, b = w.tanks
+    # Подводим противника вплотную: интересен и случай «видит», и «не видит».
+    b.x = a.x + 60.0
+    b.y = a.y
+    w.update_vision()
+    assert a.sees_enemy, "тест рассчитывал на видимого противника"
+
+    for index in (0, 1):
+        d = build_observation(w, index, BALANCE.default_budget_ms)
+        t = build_both(w, BALANCE.default_budget_ms)[index]
+        assert len(t) == len(tankp.ENGINE_PAYLOAD_FIELDS)
+        o_dict = tankp.Observation(d, None)
+        o_tup = tankp.Observation(t, None)
+        for field in ("tick", "time", "dt", "tank", "budget_ms", "bullet_speed",
+                      "bullet_turn_rate", "muzzle_len", "spread_deg", "target_half"):
+            assert getattr(o_dict, field) == getattr(o_tup, field), field
+        for view_name in ("me", "enemy"):
+            left, right = getattr(o_dict, view_name), getattr(o_tup, view_name)
+            assert (left is None) == (right is None), view_name
+            if left is not None:
+                for attr in ("x", "y", "hull", "turret", "vx", "vy", "hp", "hp_max",
+                             "ammo_ready", "cooldown", "reload"):
+                    assert getattr(left, attr) == getattr(right, attr), (view_name, attr)
+        for attr in ("enemy_visible", "in_cone", "in_range", "los_clear", "bumper",
+                     "bearing", "distance"):
+            assert getattr(o_dict.sight, attr) == getattr(o_tup.sight, attr), attr

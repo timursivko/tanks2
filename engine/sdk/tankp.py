@@ -385,13 +385,18 @@ def _num(v, default=0.0):
     return f
 
 
-#: Порядок полей нагрузки движка (``engine.observation.payload``). Быстрый
-#: путь ``Observation.__init__`` распаковывает значения словаря по порядку
-#: вставки, поэтому этот порядок — часть контракта; его проверяет тест
+#: Порядок полей нагрузки движка (``engine.observation.payload`` и
+#: ``engine.observation.payload_tuple``). Быстрый путь ``Observation.__init__``
+#: распаковывает и словарь (по порядку вставки), и кортеж — целиком, поэтому
+#: этот порядок — часть контракта; его проверяет тест
 #: ``tests/test_engine.py::test_engine_payload_field_order``.
 ENGINE_PAYLOAD_FIELDS = ("tick", "time", "dt", "tank", "budget_ms", "me",
                          "enemy", "bullet_speed", "turret_turn",
                          "muzzle_offset", "half", "spread", "sight")
+
+#: Метка «SensorView ещё не собран» (см. свойство ``Observation.sight``):
+#: сам объект состояния органов чувств строится лениво.
+_SIGHT_UNBUILT = object()
 
 
 class Observation:
@@ -399,15 +404,30 @@ class Observation:
 
     __slots__ = ("tick", "time", "dt", "tank", "budget_ms", "bullet_speed",
                  "bullet_turn_rate", "muzzle_len", "spread_deg", "me", "enemy",
-                 "sight", "map", "target_half", "_ls")
+                 "_sight", "_sight_raw", "map", "target_half", "_ls")
 
-    def __init__(self, payload: dict, mapview: MapView | None):
+    def __init__(self, payload, mapview: MapView | None):
+        if type(payload) is tuple:
+            # Самый короткий путь: движок собрал наблюдение кортежем в
+            # порядке ENGINE_PAYLOAD_FIELDS (см. build_both) — значения уже
+            # нужных типов, поэтому ни словаря, ни get(), ни float().
+            (self.tick, self.time, self.dt, self.tank, self.budget_ms,
+             me_payload, enemy, self.bullet_speed, self.bullet_turn_rate,
+             self.muzzle_len, self.target_half, self.spread_deg,
+             sight) = payload
+            self.me = TankView(me_payload)
+            self.enemy = TankView(enemy) if enemy is not None else None
+            self._sight_raw = sight
+            self._sight = _SIGHT_UNBUILT
+            self.map = mapview
+            self._ls = None
+            return
         me_payload = payload["me"]
         if type(me_payload) is tuple:
-            # Payload движка (не через JSON): ключи все на месте, а значения
-            # уже нужных типов, поэтому ни get(), ни float() не нужны.
-            # Признак — кортеж в "me": песочница отдаёт список после JSON,
-            # а engine.observation собирает кортеж (см. TankView).
+            # Payload движка словарём (не через JSON): ключи все на месте, а
+            # значения уже нужных типов, поэтому ни get(), ни float() не
+            # нужны. Признак — кортеж в "me": песочница отдаёт список после
+            # JSON, а engine.observation собирает кортеж (см. TankView).
             # Значения берутся одним проходом по словарю (порядок вставки —
             # см. ENGINE_PAYLOAD_FIELDS): это дешевле, чем 13 обращений по
             # ключу на каждый танк каждый тик.
@@ -417,7 +437,6 @@ class Observation:
              sight) = payload.values()
             self.me = TankView(me_payload)
             self.enemy = TankView(enemy) if enemy is not None else None
-            self.sight = SensorView(sight)
         else:
             get = payload.get
             self.tick = payload["tick"]
@@ -444,13 +463,37 @@ class Observation:
             self.me = TankView(me_payload)
             enemy = get("enemy")
             self.enemy = TankView(enemy) if enemy else None
-            self.sight = SensorView(payload["sight"])
+            sight = payload["sight"]
+        # Состояние органов чувств собирается при первом обращении: ни одна
+        # программа в ai/ его не читает, а SensorView — это объект и семь
+        # присваиваний на каждый танк каждый тик.
+        self._sight_raw = sight
+        self._sight = _SIGHT_UNBUILT
         self.map = mapview
         # Куда башня была направлена, когда цель была видна в последний
         # раз: башня доезжает до этой точки и стоит, вместо меандра.
         # Точка считается лениво (см. свойство ниже): она нужна только
         # тем программам, которые целятся «по памяти».
         self._ls = None
+
+    @property
+    def sight(self):
+        """Состояние органов чувств: `SensorView`, собранный при первом чтении.
+
+        Программы, которые «видят» противника по ``o.enemy``, это поле не
+        трогают — а его сборка стоит объекта и семи присваиваний на каждый
+        танк каждый тик. Значения те же: объект собирается ровно один раз из
+        того же кортежа (или словаря), что и раньше.
+        """
+        s = self._sight
+        if s is _SIGHT_UNBUILT:
+            s = self._sight = SensorView(self._sight_raw)
+        return s
+
+    @sight.setter
+    def sight(self, value) -> None:
+        # Присваивание поля скриптом остаётся возможным, как и раньше.
+        self._sight = value
 
     @property
     def _last_seen(self) -> Point:

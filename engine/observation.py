@@ -77,6 +77,21 @@ def payload(world: World, i: int, budget_ms: float, me_view, enemy_view,
     }
 
 
+def payload_tuple(world: World, i: int, budget_ms: float, me_view, enemy_view,
+                  sight, half, time_rounded: float) -> tuple:
+    """Та же нагрузка, что ``payload``, но кортежем в порядке полей.
+
+    Порядок — ``tankp.ENGINE_PAYLOAD_FIELDS``: словарь нужен там, где
+    наблюдение уходит наружу (сервер, песочница, тесты), а на горячем пути
+    ``tools/matrix.py`` его собирает и сразу распаковывает один и тот же
+    процесс, поэтому кортеж дешевле. Значения и их смысл те же.
+    """
+    bal = world.bal
+    return (world.tick, time_rounded, world.dt_rounded, i, budget_ms,
+            me_view, enemy_view, bal.bullet_speed, bal.turret_turn,
+            bal.muzzle_offset, half, bal.spread, sight)
+
+
 def build_observation(world: World, i: int, budget_ms: float) -> dict:
     """Наблюдение для танка ``i`` в текущем состоянии мира (до шага).
 
@@ -100,13 +115,15 @@ def build_observation(world: World, i: int, budget_ms: float) -> dict:
                    round(world.tick * world.dt, 5))
 
 
-def build_both(world: World, budget_ms: float) -> tuple[dict, dict]:
-    """Наблюдения обоих танков за один проход.
+def build_both(world: World, budget_ms: float) -> tuple[tuple, tuple]:
+    """Наблюдения обоих танков за один проход, каждое — кортежем полей.
 
     Порядок тот же, что при двух вызовах ``build_observation``: сначала
     танк 0, потом танк 1, — а округлённые поля каждого танка считаются один
     раз, а не дважды (они не зависят от того, чьим наблюдением танк сейчас
-    является: точности у «своего» и «врага» совпадают).
+    является: точности у «своего» и «врага» совпадают). Формат — ``tuple``
+    в порядке ``ENGINE_PAYLOAD_FIELDS`` (см. ``payload_tuple``): его
+    распаковывает быстрый путь ``tankp.Observation``.
     """
     a, b = world.tanks
     reload_value = world.bal.reload
@@ -122,10 +139,12 @@ def build_both(world: World, budget_ms: float) -> tuple[dict, dict]:
         sight_a = (False, False, False, False, False, None, None)
     if not sight_b:
         sight_b = (False, False, False, False, False, None, None)
-    return (payload(world, 0, budget_ms, view_a, view_b if (a.sees_enemy and alive_b) else None,
-                    sight_a, a.half_size, time_rounded),
-            payload(world, 1, budget_ms, view_b, view_a if (b.sees_enemy and alive_a) else None,
-                    sight_b, b.half_size, time_rounded))
+    return (payload_tuple(world, 0, budget_ms, view_a,
+                          view_b if (a.sees_enemy and alive_b) else None,
+                          sight_a, a.half_size, time_rounded),
+            payload_tuple(world, 1, budget_ms, view_b,
+                          view_a if (b.sees_enemy and alive_a) else None,
+                          sight_b, b.half_size, time_rounded))
 
 
 def deg(v: float) -> float:

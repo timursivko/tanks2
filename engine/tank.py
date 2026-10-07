@@ -127,7 +127,11 @@ class Tank:
         # в передний: S вёс танк вперёд, а отступление ИИ упиралось в противника.
         drive = (left + right) * 0.5
         want = drive * (bal.speed_fwd if drive >= 0 else bal.speed_rev)
-        want *= arena.speed_factor(self.x, self.y)
+        # Грязь есть далеко не на каждой карте: если её нет вовсе, множитель
+        # равен ровно 1.0 (так отвечает и speed_factor вне грязевых тайлов), и
+        # считать тайл под танком каждый тик незачем.
+        if arena.has_mud:
+            want *= arena.speed_factor(self.x, self.y)
         angle = self.hull + (left - right) * 0.5 * bal.hull_turn * dt
         angle = math.fmod(angle + math.pi, TAU)
         if angle < 0:
