@@ -106,8 +106,17 @@ def main() -> int:
     if "--maps" in args:
         maps = [args[args.index("--maps") + 1]]
     if "--seeds" in args:
-        i = args.index("--seeds")
-        seeds = [int(x) for x in args[i + 1:i + 4]]
+        i = args.index("--seeds") + 1
+        seeds = []
+        # Флаг сразу после списка сидов («--seeds 1 -v») раньше попадал в
+        # int() и ронял разбор: список заканчивается на первом аргументе,
+        # который не является числом. Работавшие сочетания не меняются.
+        while i < len(args) and len(seeds) < 3:
+            try:
+                seeds.append(int(args[i]))
+            except ValueError:
+                break
+            i += 1
     if "--deadline" in args:
         deadline = time.time() + float(args[args.index("--deadline") + 1])
     if "--seconds" in args:
