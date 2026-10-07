@@ -619,10 +619,10 @@ class Brain(TankProgram):
             
             # Переходим в агрессивный режим, если враг использует ракурс
             if self.foe_uses_rico and not self.aggressive_mode and self.t > self.aggressive_until:
-                # Активируем агрессивный режим на 5 секунд
+                # Активируем агрессивный режим на 8 секунд
                 self.aggressive_mode = True
-                self.aggressive_until = self.t + 5.0
-            elif not self.foe_uses_rico:
+                self.aggressive_until = self.t + 8.0
+            elif not self.foe_uses_rico and self.t > self.aggressive_until:
                 # Если враг не использует ракурс - выходим из агрессивного режима
                 self.aggressive_mode = False
 
@@ -707,24 +707,36 @@ class Brain(TankProgram):
 
         phull = e.hull + clamp(self.e_omega, -HULL_TURN, HULL_TURN) * min(t_fly, 0.7)
 
-        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс, стреляем в центр
-        # (в лоб или корму, где рикошета нет)
-        if self.aggressive_mode:
-            # В агрессивном режиме целимся в центр или корму врага
-            dx = e.x - me.x
-            dy = e.y - me.y
-            to_e = atan2(dy, dx)
-            # Угол от курса врага до линии на нас
-            angle_to_us = degrees(wrap(to_e - e.hull))
-            if angle_to_us < 0:
-                angle_to_us = -angle_to_us
+        # ПРОВЕРКА УЯЗВИМОСТИ ВРАГА: ищем углы, где можно пробить броню
+        # Вычисляем угол от курса врага до линии на нас
+        dx_total = me.x - e.x
+        dy_total = me.y - e.y
+        to_us = atan2(dy_total, dx_total)
+        angle_to_us = degrees(wrap(to_us - e.hull))
+        if angle_to_us < 0:
+            angle_to_us = -angle_to_us
+        
+        # Определяем, какую грань мы видим
+        if angle_to_us <= FACE_HALF:
+            face = 0  # лоб
+        elif angle_to_us >= 180.0 - FACE_HALF:
+            face = 2  # корма
+        else:
+            face = 1  # борт
+        
+        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс ИЛИ мы видим его лоб/корму
+        # (где рикошет менее вероятен), атакуем напрямую
+        if self.aggressive_mode or face != 1:  # если не борт - можно бить в центр
+            # В агрессивном режиме или когда видим лоб/корму - целимся в уязвимые точки
+            # Для лба и кормы - центр (рикошет 30° и 60°)
+            # Для борта - центр (рикошет 50°)
+            px, py = e.x, e.y  # центр
             
-            # Если враг подставляет борт - бьём в борт (рикошет 50°)
-            # Если лоб или корма - бьём в центр
-            if 50.0 <= angle_to_us <= 130.0:  # борт
-                px, py = e.x, e.y  # центр
-            else:  # лоб или корма
-                px, py = e.x, e.y  # центр
+            # Но если враг использует ракурс и мы видим его борт - попробуем бить в край
+            if self.foe_uses_rico and face == 1:
+                # Бьём в переднюю часть борта, где угол к нормали меньше
+                # Это сложно, поэтому пока просто бьём в центр
+                pass
         
         if d < 62.0:
             err = o.aim_error(px, py)
@@ -955,8 +967,23 @@ class Brain(TankProgram):
         t = self.t
         los_clear = not (self.nav and self.nav.los_blocked(me.x, me.y, e.x, e.y))
 
-        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс - атакуем напрямую
-        if self.aggressive_mode:
+        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс ИЛИ мы видим его лоб/корму - атакуем напрямую
+        dx_total = me.x - e.x
+        dy_total = me.y - e.y
+        to_us = atan2(dy_total, dx_total)
+        angle_to_us = degrees(wrap(to_us - e.hull))
+        if angle_to_us < 0:
+            angle_to_us = -angle_to_us
+        
+        if angle_to_us <= FACE_HALF:
+            face = 0  # лоб
+        elif angle_to_us >= 180.0 - FACE_HALF:
+            face = 2  # корма
+        else:
+            face = 1  # борт
+        
+        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс ИЛИ мы видим его лоб/корму
+        if self.aggressive_mode or face != 1:  # если не борт - можно атаковать напрямую
             # В агрессивном режиме не используем ракурс - атакуем напрямую
             want_d = PRESS_RANGE if me_ready else (KILL_RANGE if e.hp <= FINISH_HP else STANDOFF)
             
@@ -1033,6 +1060,16 @@ class Brain(TankProgram):
         if me.hp <= DMG and foe_ready and e.hp > FINISH_HP:
             want_d = HIDE_RANGE + 90.0
         pressing = (not foe_ready) and me_ready
+        
+        # АГРЕССИВНЫЙ ПОДХОД: если враг пуст - давим независимо от ракурса
+        if pressing:
+            # Враг пуст и мы заряжены - это наше время атаковать!
+            # Не используем ракурс, а атакуем напрямую
+            want_d = PRESS_RANGE
+            # Увеличиваем агрессивность
+            if self.t > self.aggressive_until:
+                self.aggressive_mode = True
+                self.aggressive_until = self.t + 3.0
 
         # Укрытие
         if not me_ready and foe_ready and d < HIDE_RANGE and t > self._cover_until:
