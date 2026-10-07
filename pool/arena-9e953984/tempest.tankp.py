@@ -109,6 +109,7 @@ class Brain(TankProgram):
         self.threat = None       # (x, y, dx, dy, t) — последний чужой выстрел
         self.prev_cd = None
         self.logged = False
+        self.last_tick = 0
 
     # --- контроль буксования ----------------------------------------------
 
@@ -144,6 +145,11 @@ class Brain(TankProgram):
     # --- главный тик ------------------------------------------------------
 
     def on_tick(self, o):
+        if o.tick <= self.last_tick:
+            # Новый бой в том же процессе: matrix.py переиспользует программу
+            # между боями, и состояние прошлого боя в новый протекать не должно.
+            self.on_start({})
+        self.last_tick = o.tick
         me = o.me
         self.t = o.time
         if self.blk is None:
