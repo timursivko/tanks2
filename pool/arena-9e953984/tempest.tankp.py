@@ -2,10 +2,10 @@
 # name: Гроза
 # author: arena-9e953984
 # color: #7ee7ff
-# description: Боевая машина манёвра: идёт к врагу по кратчайшему пути, в бою держит кольцо и дёргает передачу вперёд-назад, уходит с линии чужого выстрела и стреляет с упреждением только тогда, когда попадание вероятно.
+# description: Боевая машина манёвра: идёт к врагу по кратчайшему пути, в бою держит кольцо и дёргает передачу вперёд-назад, уходит с линии чужого выстрела, стреляет с упреждением и выбирает ракурс навылет — патрон в рикошет не тратит.
 # tags: манёвр,уклонение,упреждение,дистанция,охота
 
-from math import atan2, cos, exp, hypot, pi, sin
+from math import acos, atan2, cos, degrees, exp, hypot, pi, sin
 from tankp import Action, TankProgram, clamp, wrap
 
 TAU = 2.0 * pi
@@ -15,6 +15,76 @@ TILE = 32.0           # тайл по умолчанию (реальный пр�
 
 #: 8 направлений обхода по сетке: (dx, dy).
 NB8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+
+#: Пороги рикошета по граням (копия config.Balance), градусы к нормали:
+#: лоб 30, борт 50, корма 60. Грань — по нормали в системе корпуса.
+RICO_FRONT, RICO_SIDE, RICO_REAR = 30.0, 50.0, 60.0
+FACE_HALF = 35.0        # ширина «лба»: ±35° от курса корпуса
+RAY_HX, RAY_HY = 20.0, 14.0   # полуоси коробки цели: корпус/2 + радиус снаряда
+PEN_SCAN = 11           # число направлений перебора по силуэту цели
+
+
+def _ray_obb(px, py, dx, dy, cx, cy, hx, hy, ang):
+    """Луч против повёрнутой коробки цели: (t входа, nx, ny) или None.
+
+    Нормаль — наружу, в мировых осях; по ней движок и выбирает грань
+    брони (``engine.armor.classify_face``).
+    """
+    ca, sa = cos(ang), sin(ang)
+    ex, ey = px - cx, py - cy
+    lx = ex * ca + ey * sa
+    ly = -ex * sa + ey * ca
+    vx = dx * ca + dy * sa
+    vy = -dx * sa + dy * ca
+    tmin = -1e18
+    nx = ny = 0.0
+    if -1e-9 < vx < 1e-9:
+        if lx < -hx or lx > hx:
+            return None
+    else:
+        t1 = (-hx - lx) / vx
+        t2 = (hx - lx) / vx
+        if t1 > t2:
+            t1, t2 = t2, t1
+        tmin = t1
+        nx = -1.0 if vx > 0.0 else 1.0
+    if -1e-9 < vy < 1e-9:
+        if ly < -hy or ly > hy:
+            return None
+    else:
+        t1 = (-hy - ly) / vy
+        t2 = (hy - ly) / vy
+        if t1 > t2:
+            t1, t2 = t2, t1
+        if t1 > tmin:
+            tmin = t1
+            nx, ny = 0.0, (-1.0 if vy > 0.0 else 1.0)
+    if tmin < 0.0:
+        return None
+    wnx = nx * ca - ny * sa
+    wny = nx * sa + ny * ca
+    return tmin, wnx, wny
+
+
+def _face_theta(nx, ny, dx, dy, hull):
+    """Грань брони и угол к её нормали: (порог рикошета, theta)."""
+    rel = degrees(wrap(atan2(ny, nx) - hull))
+    if rel < 0.0:
+        rel = -rel
+    if rel > 180.0:
+        rel = 360.0 - rel
+    if rel <= FACE_HALF:
+        lim = RICO_FRONT
+    elif rel >= 180.0 - FACE_HALF:
+        lim = RICO_REAR
+    else:
+        lim = RICO_SIDE
+    c = -(dx * nx + dy * ny)
+    if c > 1.0:
+        c = 1.0
+    elif c < -1.0:
+        c = -1.0
+    return lim, degrees(acos(c))
 
 
 def _unit(x, y):
@@ -65,6 +135,9 @@ class Brain(TankProgram):
     P_HIT_FINISH = 0.06     # добивающий выстрел: стреляем и с меньшим шансом
     SEARCH_FRESH = 7.0      # сколько секунд идём к последней точке врага
     TURN_CAP = 0.62         # предел руля: выше — тяга падает, танк буксует
+    FIRE_IF_NO_PEN = False  # стрелять даже когда пробить нечем (иначе ждём)
+    PEN_BORDER = 0.0        # запас, град: пограничный удар считаем пробивающим
+    PEN_HOLD_MIN = 0.0      # ближе этой дистанции ждать ракурс некогда — стреляем
 
     # --- жизненный цикл --------------------------------------------------
 
@@ -254,6 +327,84 @@ class Brain(TankProgram):
             t = hypot(nx - mx, ny - my) / o.bullet_speed
         return nx, ny
 
+    def _turn_to(self, o, me, aim):
+        """Команда доворота башни на точку (одна ступень за такт)."""
+        err = o.aim_error(aim[0], aim[1])
+        step = o.bullet_turn_rate * o.dt
+        if err > step:
+            return 1.0
+        if err < -step:
+            return -1.0
+        return err / step
+
+    def _pen_band(self, o, enemy, me, aim):
+        """Куда целиться, чтобы снаряд пробил броню: (точка, можно_стрелять).
+
+        У брони есть «мёртвая» полоса углов: по лбу снаряд скользит после
+        30°, а по борту под тем же углом пробивает. Прямой выстрел в центр
+        в эту полосу иногда и попадает — патрон уходит в рикошет. Поэтому
+        перебираем направления в пределах силуэта цели и берём середину
+        пробивающей полосы. ``None`` — прямой прицел и так пробивает.
+        """
+        fx, fy = aim
+        d = hypot(fx - me.x, fy - me.y)
+        if d < 62.0:
+            # В упор углы считать поздно: ствол уже у корпуса цели.
+            return None
+        hull = enemy.hull + self.e_omega * clamp(d / BULLET, 0.0, 0.6)
+        bearing = atan2(fy - me.y, fx - me.x)
+        ml = o.muzzle_len
+        # Прямой луч: он же решает, нужен ли перебор вообще.
+        dx0, dy0 = cos(bearing), sin(bearing)
+        res = _ray_obb(me.x + dx0 * ml, me.y + dy0 * ml, dx0, dy0,
+                       fx, fy, RAY_HX, RAY_HY, hull)
+        if res is None:
+            return None
+        lim, theta = _face_theta(res[1], res[2], dx0, dy0, hull)
+        if theta < lim + self.PEN_BORDER:
+            # Пробивает — или почти: пограничный удар за время полёта часто
+            # становится пробивающим (корпус цели доворачивается). Не трогаем.
+            return None
+        # Прямой уйдёт в рикошет — ищем пробивающее направление.
+        half_ang = atan2(RAY_HX + 7.0, d)
+        good = []
+        for k in range(PEN_SCAN):
+            a = bearing - half_ang + 2.0 * half_ang * k / (PEN_SCAN - 1)
+            dx, dy = cos(a), sin(a)
+            hit = _ray_obb(me.x + dx * ml, me.y + dy * ml, dx, dy,
+                           fx, fy, RAY_HX, RAY_HY, hull)
+            if hit is None:
+                good.append(None)
+                continue
+            lim, theta = _face_theta(hit[1], hit[2], dx, dy, hull)
+            good.append(a if theta < lim else None)
+        if all(g is None for g in good):
+            # Пробить нечем: ждём удобного ракурса. Вплотную ждать некогда —
+            # там выстрел в скользящий борт дешевле пропущенного темпа.
+            return (aim, self.FIRE_IF_NO_PEN or d < self.PEN_HOLD_MIN)
+        # Самая широкая пробивающая полоса; её середина — самый устойчивый
+        # к разбросу ствола угол. При равной ширине берём ближнюю к центру.
+        mid_n = (PEN_SCAN - 1) / 2.0
+        best = None
+        k = 0
+        while k < PEN_SCAN:
+            if good[k] is None:
+                k += 1
+                continue
+            j = k
+            while j + 1 < PEN_SCAN and good[j + 1] is not None:
+                j += 1
+            m = (k + j) // 2
+            key = (j - k, -abs(m - mid_n))
+            if best is None or key > best[0]:
+                best = (key, good[m])
+            k = j + 1
+        a = best[1]
+        t = _ray_obb(me.x + cos(a) * ml, me.y + sin(a) * ml,
+                     cos(a), sin(a), fx, fy, RAY_HX, RAY_HY, hull)
+        t = t[0] if t is not None else d
+        return ((me.x + cos(a) * (ml + t), me.y + sin(a) * (ml + t)), True)
+
     def _gun(self, o, enemy, me):
         """Доворот башни и решение о выстреле."""
         if enemy is None:
@@ -270,15 +421,18 @@ class Brain(TankProgram):
             return err / step, False
 
         aim = self._predict(o, enemy)
-        err = o.aim_error(aim[0], aim[1])
-        step = o.bullet_turn_rate * o.dt
-        if err > step:
-            cmd = 1.0
-        elif err < -step:
-            cmd = -1.0
+        band = self._pen_band(o, enemy, me, aim)
+        if band is not None:
+            aim, hard = band
+            cmd = self._turn_to(o, me, aim)
+            if not hard:
+                # Пробить нечем: цель стоит бортом под скользящим углом —
+                # патрон в рикошет не тратим, но башню держим на ней.
+                return cmd, False
         else:
-            cmd = err / step
+            cmd = self._turn_to(o, me, aim)
         # Точная проверка: снаряд выйдет из ствола уже после доворота.
+        step = o.bullet_turn_rate * o.dt
         after = me.turret + cmd * step
         mx = me.x + cos(after) * o.muzzle_len
         my = me.y + sin(after) * o.muzzle_len
@@ -841,7 +995,6 @@ class Brain(TankProgram):
         drive = self.gear * speed * (1.0 - 0.8 * mag)
         if drive > -0.12 and drive < 0.12:
             drive = 0.12 * self.gear
-        self.drive_dbg = (ux, uy, best_k, speed, axis, turn, drive, me.hull)
         return turn, drive
 
 
