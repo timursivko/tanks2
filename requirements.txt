@@ -1,0 +1,13 @@
+# TANKSIM — зависимости
+# Установка: python -m pip install -r requirements.txt
+
+# веб-сервер и API
+fastapi>=0.115,<1.0
+uvicorn>=0.30,<1.0
+websockets>=12.0          # WebSocket для ручного боя
+python-multipart>=0.0.9   # загрузка файлов (.tankp.py)
+pydantic>=2.7,<3.0
+
+# тесты
+pytest>=8.0
+httpx>=0.27               # TestClient внутри тестов

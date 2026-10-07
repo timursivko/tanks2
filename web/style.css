@@ -1,0 +1,432 @@
+:root {
+  --bg: #101317;
+  --bg-2: #161a20;
+  --bg-3: #1d222a;
+  --line: #262c35;
+  --fg: #e6e9ee;
+  --muted: #8b95a5;
+  --accent: #ffb300;
+  --accent-2: #42a5f5;
+  --good: #4caf7d;
+  --bad: #e05c5c;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+/* Атрибут hidden должен всегда побеждать класс. Иначе плашка с `display: flex`
+   продолжает висеть после `node.hidden = true`: правило класса сильнее
+   браузерного `[hidden] { display: none }`, и элемент не исчезает. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+body { display: flex; flex-direction: column; }
+
+/* --- шапка ---------------------------------------------------------------- */
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 18px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.logo { font-size: 20px; font-weight: 800; letter-spacing: 2px; color: var(--accent); }
+.tagline { color: var(--muted); font-size: 12px; }
+
+.tabs { display: flex; gap: 4px; }
+.tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 14px;
+}
+.tab:hover { color: var(--fg); background: var(--bg-3); }
+.tab.active { color: #12151a; background: var(--accent); font-weight: 600; }
+
+.top-right { margin-left: auto; }
+.pill {
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.pill.ok { color: var(--good); border-color: #2c4a3a; }
+.pill.err { color: var(--bad); border-color: #4a2c2c; }
+
+/* --- страницы ------------------------------------------------------------- */
+
+main { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.page { display: none; height: 100%; overflow: auto; padding: 14px; }
+.page.active { display: block; }
+
+.layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: start;
+}
+.layout > .panel:only-child { grid-column: 2; }
+
+.panel {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.panel.wide { grid-column: 2 / 4; }
+
+h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin: 16px 0 8px;
+}
+.panel > h2:first-child { margin-top: 0; }
+
+/* --- поля ----------------------------------------------------------------- */
+
+.field { display: block; margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+.field select, .field input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 9px;
+  background: var(--bg-3);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.field select:focus, .field input:focus { outline: 1px solid var(--accent-2); }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+/* --- участники ------------------------------------------------------------ */
+
+.side { margin-bottom: 12px; }
+.side-head { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  margin-right: 6px; vertical-align: middle;
+}
+.dot.a { background: #ff7043; }
+.dot.b { background: #3ea6ff; }
+
+.side-meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.side-meta .bad { color: var(--bad); }
+
+/* --- зона загрузки бойца ---------------------------------------------------- */
+
+.fighter-slot { margin-bottom: 12px; }
+
+.drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  padding: 12px;
+  background: var(--bg-3);
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color .15s, background .15s;
+}
+.drop:hover, .drop:focus-visible { border-color: var(--accent-2); outline: none; }
+.drop.over { border-color: var(--accent); background: #1b2029; }
+.drop.filled { border-style: solid; }
+.drop.busy { opacity: .55; pointer-events: none; }
+
+.drop-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+/* Своё display перебивает [hidden] из браузерных стилей — возвращаем его руками. */
+.drop-empty[hidden], .drop-full[hidden] { display: none; }
+.drop-plus {
+  display: grid;
+  place-items: center;
+  width: 62px;
+  height: 62px;
+  font-size: 40px;
+  line-height: 1;
+  font-weight: 200;
+  color: var(--accent);
+}
+.drop-hint { color: var(--muted); font-size: 12.5px; max-width: 190px; }
+
+.drop-full {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+.drop-name { font-size: 18px; font-weight: 600; word-break: break-word; }
+.drop-file { color: var(--muted); font-size: 11.5px; word-break: break-all; }
+.drop-tools { display: flex; gap: 6px; margin-top: 8px; }
+
+.chip {
+  padding: 3px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.chip:hover { color: var(--fg); border-color: var(--accent-2); }
+.chip.bad:hover { color: var(--bad); border-color: var(--bad); }
+
+/* --- кнопки --------------------------------------------------------------- */
+
+.btn {
+  display: inline-block;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--fg);
+  font-size: 14px;
+  cursor: pointer;
+  text-align: center;
+}
+.btn:hover:not(:disabled) { border-color: var(--accent-2); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn-primary { background: var(--accent); color: #12151a; border-color: var(--accent); font-weight: 600; }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+/* Оба поля заняли одного и того же бойца — бой всё равно не запустится. */
+.btn-primary.warn { background: var(--bad); border-color: var(--bad); color: #fff; }
+.btn-ghost { background: transparent; }
+.btn-small { width: auto; padding: 4px 12px; }
+
+/* --- прогресс ------------------------------------------------------------- */
+
+.progress {
+  position: relative;
+  height: 20px;
+  margin-top: 10px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress i {
+  position: absolute; inset: 0 auto 0 0;
+  width: 0;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  transition: width .2s;
+}
+.progress span {
+  position: relative;
+  display: block;
+  text-align: center;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--fg);
+}
+.progress.slim { height: 16px; }
+
+/* --- сцена ---------------------------------------------------------------- */
+
+.stage:fullscreen {
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  background: var(--bg);
+  border: none;
+  border-radius: 0;
+  width: 100vw;
+  height: 100vh;
+}
+.stage:fullscreen .stage-bar,
+.stage:fullscreen .replay-bar {
+  flex: 0 0 auto;
+}
+
+.stage {
+  position: relative;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+
+.repeat-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 13, 0.7);
+  z-index: 20;
+  backdrop-filter: blur(2px);
+  border-radius: var(--radius);
+  pointer-events: none;
+}
+.repeat-overlay[hidden] { display: none; }
+.repeat-overlay .btn {
+  pointer-events: auto;
+  width: auto;
+  font-size: 18px;
+  padding: 12px 32px;
+  box-shadow: 0 0 20px rgba(255, 179, 0, 0.4);
+}
+.stage:fullscreen .repeat-overlay {
+  border-radius: 0;
+}
+.stage-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 2px 4px 10px;
+  font-size: 12px; color: var(--muted);
+}
+.spacer { margin-left: auto; }
+.check { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+select.mini {
+  padding: 1px 4px; font-size: 11px; margin-left: 2px;
+  background: #171b21; color: var(--fg); border: 1px solid #2a313b;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #0b0d10;
+  border-radius: 8px;
+}
+#cv-man:focus { outline: 1px solid var(--accent-2); }
+
+.replay-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 4px 2px;
+}
+.replay-bar input[type=range] { flex: 1; accent-color: var(--accent); }
+.time { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 110px; text-align: right; }
+.speed { background: var(--bg-3); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+
+/* --- журнал и итог -------------------------------------------------------- */
+
+.result {
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 13px;
+  min-height: 60px;
+  white-space: pre-line;
+}
+.result .win { color: var(--good); font-weight: 600; }
+.result .draw { color: var(--muted); }
+
+.log {
+  max-height: 380px;
+  overflow: auto;
+  font-size: 12px;
+  font-family: ui-monospace, Consolas, monospace;
+  background: #0b0d10;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+.log .row { padding: 1px 0; border-bottom: 1px solid #171a20; }
+.log .t { color: #5d6675; margin-right: 6px; }
+.log .a { color: #ff7043; }
+.log .b { color: #3ea6ff; }
+.log .hit { color: var(--accent); }
+.log .dead { color: var(--bad); }
+.log .sys { color: var(--good); }
+.log .picks .row { cursor: pointer; }
+.log .picks .row:hover { background: var(--bg-3); }
+
+.picks { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
+.muted { color: var(--muted); }
+
+.table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+.table th, .table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.table th { color: var(--muted); font-weight: 500; font-size: 12px; }
+.table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.table tr.win-row td:first-child { color: var(--accent); }
+.table tr.gone td { opacity: .45; }
+.table tbody tr { animation: rowin .25s ease-out both; }
+@keyframes rowin { from { opacity: 0; } to { opacity: 1; } }
+
+/* --- справка -------------------------------------------------------------- */
+
+.doc {
+  max-width: 860px;
+  margin: 0 auto;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 26px 30px 40px;
+}
+.doc h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: 2px; color: var(--accent); }
+.doc h2 { color: var(--fg); text-transform: none; letter-spacing: 0; font-size: 18px; margin: 26px 0 8px; }
+.doc h3 { font-size: 15px; margin: 20px 0 6px; }
+.doc p, .doc li { color: #c6ccd6; }
+.doc code { background: var(--bg-3); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.doc pre {
+  background: #0b0d10; border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 14px; overflow: auto;
+}
+.doc pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; }
+.doc .muted { color: var(--muted); font-size: 12px; }
+
+.raw { margin-top: 14px; }
+.raw summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.raw pre {
+  background: #0b0d10; border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px; max-height: 320px; overflow: auto;
+  font-size: 12px; margin-bottom: 0;
+}
+
+.hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+.hint.center { text-align: center; padding-top: 8px; }
+
+/* --- всплывашка ----------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  right: 16px; bottom: 16px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 14px;
+  max-width: 380px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: .2s;
+  pointer-events: none;
+  font-size: 13px;
+}
+.toast.show { opacity: 1; transform: none; }
+.toast.bad { border-left-color: var(--bad); }
+
+@media (max-width: 1180px) {
+  .layout { grid-template-columns: 1fr; }
+  .panel.wide { grid-column: 1; }
+}

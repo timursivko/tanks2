@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TANKSIM — арена танковых программ</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2316181d'/><rect x='7' y='17' width='18' height='8' rx='2' fill='%23ffb300'/><rect x='13' y='9' width='7' height='9' rx='2' fill='%23ffb300'/><rect x='19' y='10' width='12' height='3' rx='1' fill='%23ffb300'/></svg>">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo">TANKSIM</span>
+    <span class="tagline">арена танковых программ</span>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="sim">Бой</button>
+    <button class="tab" data-tab="manual">Ручной бой</button>
+    <button class="tab" data-tab="replays">Реплеи</button>
+    <button class="tab" data-tab="help">Справка</button>
+  </nav>
+  <div class="top-right">
+    <span id="engine-status" class="pill">соединение…</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ================= БОЙ ================= -->
+  <section class="page active" id="page-sim">
+    <div class="layout">
+      <aside class="panel">
+        <h2>Участники</h2>
+
+        <div class="fighter-slot">
+          <div class="side-head"><span class="dot a"></span> Танк A</div>
+          <div class="drop" id="drop-a" data-slot="a" tabindex="0" role="button"
+               aria-label="Танк A: перетащите сюда Python скрипт ИИ бойца">
+            <div class="drop-empty">
+              <div class="drop-plus">+</div>
+              <div class="drop-hint">Перетащите сюда Python скрипт ИИ бойца</div>
+            </div>
+            <div class="drop-full" hidden>
+              <div class="drop-name"></div>
+              <div class="drop-file"></div>
+              <div class="drop-tools">
+                <button class="chip" type="button" data-act="replace">заменить</button>
+                <button class="chip bad" type="button" data-act="clear">✕</button>
+              </div>
+            </div>
+          </div>
+          <input type="file" id="file-a" accept=".py,.tankp.py,.zip" hidden>
+          <div class="side-meta" id="meta-a">—</div>
+        </div>
+
+        <div class="fighter-slot">
+          <div class="side-head"><span class="dot b"></span> Танк B</div>
+          <div class="drop" id="drop-b" data-slot="b" tabindex="0" role="button"
+               aria-label="Танк B: перетащите сюда Python скрипт ИИ бойца">
+            <div class="drop-empty">
+              <div class="drop-plus">+</div>
+              <div class="drop-hint">Перетащите сюда Python скрипт ИИ бойца</div>
+            </div>
+            <div class="drop-full" hidden>
+              <div class="drop-name"></div>
+              <div class="drop-file"></div>
+              <div class="drop-tools">
+                <button class="chip" type="button" data-act="replace">заменить</button>
+                <button class="chip bad" type="button" data-act="clear">✕</button>
+              </div>
+            </div>
+          </div>
+          <input type="file" id="file-b" accept=".py,.tankp.py,.zip" hidden>
+          <div class="side-meta" id="meta-b">—</div>
+        </div>
+
+        <h2>Условия</h2>
+        <label class="field">Карта
+          <select id="sel-map"></select>
+        </label>
+        <div class="grid2">
+          <label class="field">Сид
+            <input type="number" id="in-seed" value="1" min="0" step="1">
+          </label>
+          <label class="field">Бюджет, мс
+            <input type="number" id="in-budget" value="10" min="1" max="500" step="1">
+          </label>
+        </div>
+
+        <button class="btn btn-primary" id="btn-fight">Рассчитать бой</button>
+        <div class="progress" id="sim-progress"><i></i><span>—</span></div>
+
+        <details class="raw">
+          <summary>Исходник программы</summary>
+          <pre id="src-view">перетащите скрипт в поле «Танк A»</pre>
+        </details>
+      </aside>
+
+      <section class="stage">
+        <div class="stage-bar">
+          <span id="sim-title">Бой не запущен</span>
+          <span class="spacer"></span>
+          <label class="check"><input type="checkbox" id="opt-vision" checked> зрение</label>
+          <label class="check">кто
+            <select id="sim-pov" class="mini">
+              <option value="a" selected>танк A</option>
+              <option value="b">танк B</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="opt-trails" checked> траектории</label>
+          <label class="check"><input type="checkbox" id="opt-grid"> сетка</label>
+          <button class="chip fs-btn" type="button" title="На весь экран">⛶</button>
+        </div>
+        <canvas id="cv-sim" width="1152" height="672"></canvas>
+        <div class="replay-bar">
+          <button class="btn btn-small" id="sim-play">▶</button>
+          <input type="range" id="sim-seek" min="0" max="1000" value="0">
+          <span class="time" id="sim-time">0.0 / 0.0 с</span>
+          <select id="sim-speed" class="speed">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+          </select>
+        </div>
+        <div class="repeat-overlay" id="sim-repeat" hidden>
+          <button class="btn btn-primary" id="btn-sim-repeat">Повторить</button>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <h2>Итог</h2>
+        <div id="sim-result" class="result">—</div>
+        <h2>Журнал боя</h2>
+        <div class="log" id="sim-log"></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ================= РУЧНОЙ БОЙ ================= -->
+  <section class="page" id="page-manual">
+    <div class="layout">
+      <aside class="panel">
+        <h2>Ручной бой</h2>
+        <label class="field">Ты играешь за
+          <select id="man-side"><option value="a">танк A</option><option value="b">танк B</option></select>
+        </label>
+        <label class="field">Карта
+          <select id="man-map"></select>
+        </label>
+        <label class="field">Имя
+          <input type="text" id="man-name" value="Игрок" maxlength="24">
+        </label>
+
+        <h2>Противник</h2>
+        <div class="fighter-slot">
+          <div class="drop" id="drop-foe" data-slot="foe" tabindex="0" role="button"
+               aria-label="Противник: перетащите сюда Python скрипт ИИ бойца">
+            <div class="drop-empty">
+              <div class="drop-plus">+</div>
+              <div class="drop-hint">Перетащите сюда Python скрипт ИИ бойца</div>
+            </div>
+            <div class="drop-full" hidden>
+              <div class="drop-name"></div>
+              <div class="drop-file"></div>
+              <div class="drop-tools">
+                <button class="chip" type="button" data-act="replace">заменить</button>
+                <button class="chip bad" type="button" data-act="clear">✕</button>
+              </div>
+            </div>
+          </div>
+          <input type="file" id="file-foe" accept=".py,.tankp.py,.zip" hidden>
+          <div class="side-meta" id="meta-foe">—</div>
+        </div>
+
+        <button class="btn btn-primary" id="man-start">Начать бой</button>
+        <button class="btn btn-ghost" id="man-stop" disabled>Остановить</button>
+        <div class="hint">
+          <b>Управление:</b> W/S — газ, A/D — корпус, мышь — прицел,
+          ЛКМ или пробел — огонь.
+        </div>
+        <div class="result" id="man-result">—</div>
+      </aside>
+
+      <section class="stage">
+        <div class="stage-bar">
+          <span id="man-title">Живой бой не запущен</span>
+          <label class="check"><input type="checkbox" id="man-vision" checked> моё зрение</label>
+          <label class="check"><input type="checkbox" id="man-reveal"> видеть противника</label>
+          <label class="check"><input type="checkbox" id="man-foe-vision"> его радиус обзора</label>
+          <span class="spacer"></span>
+          <span id="man-fps" class="pill">—</span>
+          <button class="chip fs-btn" type="button" title="На весь экран">⛶</button>
+        </div>
+        <canvas id="cv-man" width="1152" height="672" tabindex="0"></canvas>
+        <div class="hint center">Врага видно, только если он в радиусе обзора 760 px и нет стены между вами.</div>
+        <div class="repeat-overlay" id="man-repeat" hidden>
+          <button class="btn btn-primary" id="btn-man-repeat">Повторить</button>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <h2>Журнал</h2>
+        <div class="log" id="man-log"></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ================= РЕПЛЕИ ================= -->
+  <section class="page" id="page-replays">
+    <div class="layout">
+      <aside class="panel">
+        <h2>Сохранённые бои</h2>
+        <div class="log picks" id="rep-list"></div>
+        <button class="btn btn-ghost" id="rep-refresh">Обновить</button>
+      </aside>
+      <section class="stage">
+        <div class="stage-bar">
+          <span id="rep-title">Реплей не выбран</span>
+          <span class="spacer"></span>
+          <label class="check"><input type="checkbox" id="rep-vision" checked> зрение</label>
+          <label class="check">кто
+            <select id="rep-pov" class="mini">
+              <option value="a" selected>танк A</option>
+              <option value="b">танк B</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="rep-trails" checked> траектории</label>
+          <button class="chip fs-btn" type="button" title="На весь экран">⛶</button>
+        </div>
+        <canvas id="cv-rep" width="1152" height="672"></canvas>
+        <div class="replay-bar">
+          <button class="btn btn-small" id="rep-play">▶</button>
+          <input type="range" id="rep-seek" min="0" max="1000" value="0">
+          <span class="time" id="rep-time">0.0 / 0.0 с</span>
+          <select id="rep-speed" class="speed">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+          </select>
+        </div>
+        <div class="result" id="rep-result">—</div>
+        <div class="repeat-overlay" id="rep-repeat" hidden>
+          <button class="btn btn-primary" id="btn-rep-repeat">Повторить</button>
+        </div>
+      </section>
+      <aside class="panel">
+        <h2>Журнал боя</h2>
+        <div class="log" id="rep-log"></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ================= СПРАВКА ================= -->
+  <section class="page" id="page-help">
+    <div class="doc">
+      <h1>TANKSIM</h1>
+      <p>Локальная арена для танковых программ на Python. Загрузите свой скрипт,
+         выберите противника и карту — бой рассчитается целиком, без пауз,
+         и сохранится реплей, который можно пересмотреть по кадрам.</p>
+
+      <h2>Формат программы TANKP</h2>
+      <p>Файл с расширением <code>.tankp.py</code>. Первая строка — заголовок версии,
+         дальше необязательные метаданные в комментариях:</p>
+      <pre><code>#!TANKP 1
+# name: Мой танк
+# author: Я
+# difficulty: 3
+# color: #42a5f5
+# description: Что умеет.
+# tags: скорость,тактика
+
+from tankp import TankProgram, Action
+
+
+class Brain(TankProgram):
+    """Мозг танка. Вызывается 60 раз в секунду."""
+
+    def on_start(self, ctx):
+        self.память = 0
+
+    def on_tick(self, o):
+        self.память += 1
+        if o.enemy is None:
+            turn, drive = o.steer_to(*o.map.spawns[1 - o.tank])
+            return Action(drive=0.8, turn=turn)
+
+        # враг виден только в радиусе обзора и если нет стены между нами
+        err = o.me.turret_error(o.lead(o.enemy))
+        return Action(drive=0.4, turn=o.sign(o.me.hull_error(o.enemy)),
+                      turret=o.sign(err), fire=abs(err) &lt; 5)
+
+
+program = Brain()</code></pre>
+
+      <h3>Несколько файлов: zip</h3>
+      <p>Если боец не помещается в один файл — рядом с кодом нужны веса,
+         настройки или свои модули — соберите <code>zip</code>. Точка входа —
+         <code>main.py</code> строго в корне архива, остальное кладётся рядом
+         и доступно обычным <code>import</code> и <code>open</code> относительно
+         <code>__file__</code>:</p>
+      <pre><code>мой-танк.zip
+├── main.py            ← #!TANKP и program = Brain()
+├── brain.py           ← import brain
+├── weights.json       ← open('weights.json') рядом с main.py
+└── cfg.yaml</code></pre>
+      <p>Имя архива становится именем бойца. Служебные каталоги
+         (<code>__pycache__</code>) и бинарники при распаковке пропускаются,
+         а имена вроде <code>engine</code> или <code>tankp</code> на верхнем
+         уровне запрещены: пакет не должен подменять модули движка.</p>
+
+      <h3>Что доступно программе</h3>
+      <table class="table">
+        <tr><th>Объект</th><th>Что внутри</th></tr>
+        <tr><td><code>o.me</code></td><td>свой танк: <code>x, y, hull, turret, vx, vy, hp, hp_max, ammo_ready, cooldown, reload</code></td></tr>
+        <tr><td><code>o.enemy</code></td><td>противник, если он в поле зрения, иначе <code>None</code></td></tr>
+        <tr><td><code>o.tank</code></td><td>индекс своего танка: 0 или 1</td></tr>
+        <tr><td><code>o.tick</code>, <code>o.time</code></td><td>номер тика и время в секундах</td></tr>
+        <tr><td><code>o.map</code></td><td>карта: <code>rows</code>, <code>clearance</code>, <code>blocked_at/blocked_between</code>, <code>steer_to</code>, <code>spawns</code></td></tr>
+        <tr><td><code>o.lead(enemy)</code></td><td>точка встречи с летящим снарядом</td></tr>
+        <tr><td><code>o.log(...)</code></td><td>строка в журнал боя</td></tr>
+      </table>
+
+      <h3>Правила честной игры</h3>
+      <ul>
+        <li>Один тик — один вызов <code>on_tick</code>. Не успеваешь за бюджет — команда считается пустой.</li>
+        <li>Видно только то, что видит танк: <span id="doc-range"></span> и линия прямой видимости.</li>
+        <li>Завис или съел память — процесс перезапускается, нарушение попадает в журнал.</li>
+        <li>Программа не может писать файлы и выходить в сеть: она работает в отдельном процессе.</li>
+      </ul>
+
+      <h3>Броня</h3>
+      <p>На урон броня не влияет: пробитие всегда стоит одного и того же
+         урона. Единственное, что она делает, — рикошет. Угол считается между
+         направлением удара и нормалью грани: чем он больше, тем выше шанс
+         скользнуть. Лоб держит удар дольше всех (отскакивает при угле к нормали > 45°),
+         а борт и корма рикошетят при угле к нормали > 60°.</p>
+      <table class="table" id="doc-armor"></table>
+      <p class="muted">Таран снимает здоровье обоим: <span id="doc-ram"></span>.</p>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/render.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
