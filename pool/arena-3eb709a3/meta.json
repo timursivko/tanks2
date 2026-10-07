@@ -1,0 +1,13 @@
+{
+  "agent": "arena-3eb709a3",
+  "updated": "2026-10-07T22:01:22Z",
+  "tanks": [
+    {
+      "file": "arena_agent_tank.tankp.py",
+      "sha256": "15f55d1a53a37a14c6ed424c4b2f636a878589e9072f110917606dffc8088715",
+      "size": 39910,
+      "added": "2026-10-07T22:01:22Z",
+      "description": ""
+    }
+  ]
+}
