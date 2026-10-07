@@ -9,6 +9,15 @@
 wall-clock можно потратить на бои, а потом печатается то, что успело::
 
     python tools/matrix.py --deadline 20
+
+Почему без процессов (``multiprocessing``/``ProcessPoolExecutor``): скрипты
+загружаются один раз на весь прогон и живут между боями. Загрузчик
+(``probe.load_inproc``) вызывает ``on_start`` ровно один раз, и внутреннее
+состояние программ переходит из боя в бой — исход зависит от порядка пар.
+Если разложить бои по процессам, у каждой программы окажется своя история
+состояния, и числа в отчёте поедут (ничьи, время боёв, распределение побед
+считаются по-другому). Поэтому прогон остаётся однопоточным: ускоряется сам
+счёт боя (см. engine/), а не раскладка по ядрам.
 """
 
 from __future__ import annotations
@@ -28,21 +37,60 @@ import tankp  # noqa: E402
 from config import BALANCE  # noqa: E402
 from engine.action import Action  # noqa: E402
 from engine.grid import load_map  # noqa: E402
-from engine.observation import build_observation, map_payload  # noqa: E402
+from engine.observation import build_both, map_payload  # noqa: E402
 from engine.world import World  # noqa: E402
 from probe import load_inproc  # noqa: E402
 
+#: Загруженные арены по имени карты. Арена во время боя не меняется (движок
+#: её только читает), а её сборка — разбор JSON и BFS «зазора» до стен —
+#: самая дорогая часть подготовки. Держим по одной на карту: полный прогон
+#: играет одну и ту же карту 63 раза.
+_ARENAS: dict[str, object] = {}
 
-def run_one(fn_a, fn_b, map_name: str, seed: int, bal=BALANCE):
-    world = World.create(load_map(map_name), bal, seed=seed)
+
+def load_arena(map_name: str):
+    """Арена карты из кэша (грузится один раз на прогон)."""
+    arena = _ARENAS.get(map_name)
+    if arena is None:
+        arena = load_map(map_name)
+        _ARENAS[map_name] = arena
+    return arena
+
+
+def run_one(fn_a, fn_b, map_name: str, seed: int, bal=BALANCE, arena=None):
+    """Один бой без процессов. ``arena`` — уже загруженная карта.
+
+    Горячий цикл написан «в лоб»: имена, которые нужны каждый тик
+    (наблюдение, команда, шаг мира), берутся в локальные переменные, а
+    список команд переиспользуется. Значения те же, что и при вызове
+    через модули: это тот же код, только без повторного поиска имён.
+    """
+    if arena is None:
+        arena = load_arena(map_name)
+    world = World.create(arena, bal, seed=seed)
     mv = tankp.MapView(map_payload(world))
-    fns = [fn_a, fn_b]
+    fns = (fn_a, fn_b)
+    budget = bal.default_budget_ms
+    obs_cls = tankp.Observation
+    sdk_action = tankp.Action
+    build = build_both
+    clamp = Action.clamp
+    step = world.step
+    acts = [None, None]
     while not world.over:
-        acts = []
-        for i in range(2):
-            obs = tankp.Observation(build_observation(world, i, bal.default_budget_ms), mv)
-            acts.append(Action.clamp(fns[i](obs)))
-        world.step(acts)
+        # Оба наблюдения собираются до решений: мир между ними не меняется,
+        # а округлённые поля каждого танка считаются один раз (build_both).
+        obs_a, obs_b = build(world, budget)
+        raw = fns[0](obs_cls(obs_a, mv))
+        # Команда SDK уже нормализована ровно так же, как это делает
+        # Action.clamp (диапазоны -1..1 и bool у fire), поэтому в обычном
+        # случае она уходит в мир как есть — без копии в Action движка.
+        # Любой другой ответ скрипта (кортеж, словарь, None, свой объект)
+        # разбирается прежним путём.
+        acts[0] = raw if raw.__class__ is sdk_action else clamp(raw)
+        raw = fns[1](obs_cls(obs_b, mv))
+        acts[1] = raw if raw.__class__ is sdk_action else clamp(raw)
+        step(acts)
     return world
 
 
@@ -67,6 +115,7 @@ def main() -> int:
     bal = replace(BALANCE, max_seconds=int(seconds)) if seconds else BALANCE
 
     fns = {k: load_inproc(k) for k in keys}
+    arenas = {mp: load_arena(mp) for mp in maps}
     wins = {k: 0 for k in keys}
     draws = 0
     total = 0
@@ -81,7 +130,7 @@ def main() -> int:
             print(f"остановлено по --deadline: {total} из {len(matches)} боёв",
                   flush=True)
             break
-        world = run_one(fns[a], fns[b], mp, seed, bal)
+        world = run_one(fns[a], fns[b], mp, seed, bal, arenas[mp])
         total += 1
         if world.outcome == "draw":
             draws += 1

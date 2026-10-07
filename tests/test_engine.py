@@ -488,3 +488,24 @@ def test_ram_pushes_attacker_backwards() -> None:
     assert a.rams, "танки не столкнулись"
     assert a.vx <= 0.0, f"атакующий разогнался назад от тарана: vx={a.vx:.1f}"
 
+
+def test_engine_payload_field_order() -> None:
+    """Порядок полей нагрузки — контракт с SDK (см. tankp.ENGINE_PAYLOAD_FIELDS).
+
+    Быстрый путь ``tankp.Observation`` распаковывает словарь движка одним
+    проходом, поэтому поля обязаны идти ровно в этом порядке: если он
+    поменяется, значения уедут в чужие поля молча.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    sdk = _Path(__file__).resolve().parents[1] / "engine" / "sdk"
+    if str(sdk) not in _sys.path:
+        _sys.path.insert(0, str(sdk))
+    import tankp
+
+    from engine.observation import build_observation
+
+    w = World.create(load_map("arena"), BALANCE, seed=1)
+    payload = build_observation(w, 0, BALANCE.default_budget_ms)
+    assert tuple(payload) == tankp.ENGINE_PAYLOAD_FIELDS

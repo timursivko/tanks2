@@ -20,10 +20,10 @@ from config import Balance
 from engine import projectile
 from engine.action import Action
 from engine.events import EndReason, EventKind, Outcome
-from engine.geometry import dist, segment_obb
+from engine.geometry import segment_obb
 from engine.grid import Arena, push_out
 from engine.tank import Tank
-from engine.visibility import can_see
+from engine.visibility import can_see, can_see_tuple
 
 
 def _obb_span(tank: Tank, ux: float, uy: float) -> float:
@@ -58,6 +58,9 @@ class World:
 
     def __post_init__(self) -> None:
         self.dt = 1.0 / self.tick_rate
+        #: ``dt`` для наблюдения (тот же round, что был на каждый тик, но
+        #: значение постоянно для боя — считается один раз).
+        self.dt_rounded = round(self.dt, 5)
         self.rng = random.Random(self.seed)
         self.max_ticks = int(self.max_ticks)
 
@@ -110,20 +113,35 @@ class World:
     # --- наблюдение ---------------------------------------------------------
 
     def vision_of(self, i: int) -> dict:
-        me = self.tanks[i]
-        foe = self.tanks[1 - i]
+        tanks = self.tanks
+        me = tanks[i]
+        foe = tanks[1 - i]
         return can_see(self.arena, me.x, me.y, me.turret, foe.x, foe.y,
                        foe.half_size, foe.hull, self.bal)
 
     def update_vision(self) -> None:
-        for i, t in enumerate(self.tanks):
-            other = self.tanks[1 - i]
-            d = self.vision_of(i)
-            t.sees_enemy = d["visible"] and other.alive
-            t.sight_detail = d
-        a_sees, b_sees = self.tanks[0].sees_enemy, self.tanks[1].sees_enemy
-        self.tanks[0].seen_by = (b_sees, a_sees)
-        self.tanks[1].seen_by = (a_sees, b_sees)
+        # Тот же расчёт, что и vision_of, но для двух танков сразу:
+        # вызовы и чтения полей мира на каждый тик дешевле не дублировать.
+        tanks = self.tanks
+        arena = self.arena
+        bal = self.bal
+        a = tanks[0]
+        b = tanks[1]
+        # Кортеж вместо словаря (см. can_see_tuple): первым полем идёт
+        # «виден ли противник», ровно как в наблюдении скрипта. Если цель
+        # уже мертва, поле сбрасывается: наблюдение читает его напрямую.
+        d = can_see_tuple(arena, a.x, a.y, a.turret, b.x, b.y, b.half_size, b.hull, bal)
+        alive_b = b.alive
+        a.sees_enemy = d[0] and alive_b
+        a.sight_detail = (False,) + d[1:] if (d[0] and not alive_b) else d
+        d = can_see_tuple(arena, b.x, b.y, b.turret, a.x, a.y, a.half_size, a.hull, bal)
+        alive_a = a.alive
+        b.sees_enemy = d[0] and alive_a
+        b.sight_detail = (False,) + d[1:] if (d[0] and not alive_a) else d
+        a_sees = a.sees_enemy
+        b_sees = b.sees_enemy
+        a.seen_by = (b_sees, a_sees)
+        b.seen_by = (a_sees, b_sees)
 
     # --- шаг ----------------------------------------------------------------
 
@@ -219,8 +237,15 @@ class World:
         a, b = self.tanks
         if not a.alive or not b.alive:
             return None
-        d = dist(a.x, a.y, b.x, b.y)
+        d = math.hypot(b.x - a.x, b.y - a.y)
         if d < 1e-6:
+            return None
+        # Быстрая отсечка: корпус не выходит за полудиагональ (с запасом
+        # 1.4143 = чуть больше sqrt(2)), поэтому на расстоянии больше суммы
+        # полудиагоналей перекрытия быть не может — _obb_span не нужен.
+        hxa, hya = a.half_size
+        hxb, hyb = b.half_size
+        if d >= 1.4143 * ((hxa if hxa > hya else hya) + (hxb if hxb > hyb else hyb)):
             return None
         ux, uy = (b.x - a.x) / d, (b.y - a.y) / d
         # Настоящее перекрытие корпусов, а не попадание луча. segment_obb
