@@ -3,28 +3,24 @@
 # author: arena-3eb709a3
 # difficulty: 5
 # color: #ff0000
-# description: Ультимативный дуэлянт: адаптивный ракурс (35°+агрессия), 3 модели упреждения с онлайн-выбором, обнаружение уязвимостей врага, уклонение от снарядов, темп по перезарядке, A* навигация, патрулирование. Адаптируется к стилю врага: если противник тоже использует ракурс - переходит в агрессивный режим.
-# tags: ракурс,упреждение,уклонение,темп,навигация,адаптация,агрессия
+# description: Ультимативный дуэлянт: ракурс рикошета 35°, адаптивное упреждение с 3 моделями, случайные манёвры для непредсказуемости, уклонение от снарядов, темп по перезарядке, A* навигация. Оптимизирован для победы над всеми агентами в pool.
+# tags: ракурс,упреждение,уклонение,темп,навигация,адаптация,случайность
 
 """ArenaAgent - лучший танк для соревнований.
 
 Ключевые особенности:
-1. Адаптивный ракурс: держит корпус под 35° к линии на врага, но может переходить в прямой режим
-2. Адаптивное упреждение: 3 модели движения (постоянная скорость, дуга, ускорение) с онлайн-выбором лучшей
-3. Обнаружение уязвимостей врага: когда враг не держит ракурс - атакуем его слабые стороны
-4. Уклонение от снарядов: отслеживает летящие снаряды и уводит танк с линии
-5. Темп по перезарядке: давит когда враг пуст, отходит когда заряжен
-6. A* навигация: обход препятствий с кэшированием пути
-7. Патрулирование: серпантинный маршрут по всей карте
-8. Защита от застревания: обнаружение и выход из клина
-9. Адаптация к стилю врага: если противник тоже использует ракурс - переходим в агрессивный режим
-10. Оптимизация под бюджет: все вычисления укладываются в 10мс на тик
+1. Ракурс рикошета: держит корпус под 35° к линии на врага
+2. Адаптивное упреждение: 3 модели движения с онлайн-выбором лучшей
+3. Случайные манёвры: добавлена непредсказуемость в движение
+4. Уклонение от снарядов: отслеживает летящие снаряды
+5. Темп по перезарядке: давит когда враг пуст
+6. A* навигация: обход препятствий
+7. Оптимизация под бюджет: все вычисления укладываются в 10мс
 """
 
 from math import acos, atan2, cos, degrees, fabs, hypot, pi, radians, sin
-from heapq import heappush, heappop
 
-from tankp import TankProgram, Action, clamp, wrap, sign, hypot as tankp_hypot
+from tankp import TankProgram, Action, clamp, wrap, sign
 
 # --- Константы движка ---
 BULLET_SPEED = 620.0
@@ -36,68 +32,105 @@ HP_MAX = 10.0
 DMG = 4.0
 HULL_TURN = 2.6
 TURRET_TURN = 3.6
-ACCEL = 460.0
-SPEED_FWD = 190.0
-SPEED_REV = 120.0
-VIEW_RANGE = 760.0
 
-# Пороги рикошета (угол к нормали)
+# Пороги рикошета
 RICO = (30.0, 50.0, 60.0)
 FACE_HALF = 35.0
 
-# Размеры корпуса для геометрии
-HL = 20.0  # hull_len/2 + bullet_radius
-HW = 14.0  # hull_wid/2 + bullet_radius
+HL = 20.0
+HW = 14.0
 
 TAU = pi * 2.0
 
-
 # --- Настройки боя ---
-D_MIN = 160.0       # ближе — выталкиваем
-D_MAX = 450.0       # дальше — сближаемся
-STANDOFF = 280.0    # оптимальная дистанция карусели
-PRESS_RANGE = 200.0 # дистанция давления когда враг пуст
-HIDE_RANGE = 480.0  # дистанция ухода когда мы пусты
-KILL_RANGE = 220.0  # дистанция добивания
-TRADE_RANGE = 320.0 # дистанция когда оба готовы
-CLOSE_RANGE = 90.0  # ближний бой
+D_MIN = 160.0
+D_MAX = 450.0
+STANDOFF = 280.0
+PRESS_RANGE = 200.0
+HIDE_RANGE = 480.0
+KILL_RANGE = 220.0
+CLOSE_RANGE = 90.0
 
-# Ракурс
-ANGLE_LOCK = radians(35.0)  # целевой угол ракурса
-ANGLE_JIT = radians(1.5)    # джиттер ракурса
-TRACK_GAIN = 5.0            # усиление доворота корпуса
+ANGLE_LOCK = radians(35.0)
+ANGLE_JIT = radians(2.0)
+TRACK_GAIN = 5.0
 BEAR_LEAD = 1.0 / (TRACK_GAIN * HULL_TURN)
 
-# Упреждение
-LEAD_WIN = 24      # окно для оценки модели
-WANDER_MAX = 30.0   # максимальная неопределённость
+DODGE_MISS = 42.0
+DODGE_CLEAR = 46.0
 
-# Уклонение
-DODGE_MISS = 42.0  # минимальное расстояние для уклонения
-DODGE_CLEAR = 46.0  # проверка стены при уклонении
+ERR_READY = 34.0
+ERR_EMPTY = 58.0
+TF_READY = 0.62
+TF_EMPTY = 0.95
+FINISH_HP = 4.0
 
-# Темп
-ERR_READY = 34.0   # допуск ошибки когда враг заряжен
-ERR_EMPTY = 58.0   # допуск когда враг пуст
-TF_READY = 0.62    # допуск времени полёта когда враг заряжен
-TF_EMPTY = 0.95    # допуск когда враг пуст
-FINISH_HP = 4.0    # ХП для перехода в режим добивания
-
-# Манёвр
-SIDE_MIN = 2.0     # минимальная длительность стороны ракурса
+SIDE_MIN = 2.0
 SIDE_MAX = 5.0
-GEAR_MIN = 0.26    # полупериод маятника
+GEAR_MIN = 0.26
 GEAR_MAX = 0.62
 
-# Поиск
-HUNT_FRESH = 4.0   # время преследования по следу
+HUNT_FRESH = 4.0
 STUCK_WINDOW = 0.6
 STUCK_MILES = 14.0
 
 
-class Nav:
-    """Навигация: сетка карты, A* с кэшем, патруль."""
+def ray_obb(ox, oy, dx, dy, cx, cy, hx, hy, ang):
+    ca = cos(ang)
+    sa = sin(ang)
+    rx = ox - cx
+    ry = oy - cy
+    lx = rx * ca + ry * sa
+    ly = -rx * sa + ry * ca
+    ldx = dx * ca + dy * sa
+    ldy = -dx * sa + dy * ca
 
+    tmin = 0.0
+    axis = -1
+    sgn = 0.0
+    for i, (p, q, h) in enumerate(((lx, ldx, hx), (ly, ldy, hy))):
+        if fabs(q) < 1e-12:
+            if fabs(p) > h:
+                return None
+            continue
+        s = -1.0 if q > 0 else 1.0
+        t1 = (-h - p) / q
+        t2 = (h - p) / q
+        if t1 > t2:
+            t1, t2 = t2, t1
+        if t1 > tmin:
+            tmin = t1
+            axis = i
+            sgn = s
+    if axis < 0:
+        if fabs(ldx) >= fabs(ldy):
+            axis, sgn = 0, (-1.0 if ldx > 0 else 1.0)
+        else:
+            axis, sgn = 1, (-1.0 if ldy > 0 else 1.0)
+    nx = sgn if axis == 0 else 0.0
+    ny = sgn if axis == 1 else 0.0
+    wx = nx * ca - ny * sa
+    wy = nx * sa + ny * ca
+    rel = degrees(wrap(atan2(wy, wx) - ang))
+    arel = rel if rel >= 0.0 else -rel
+    if arel <= FACE_HALF:
+        face = 0
+    elif arel >= 180.0 - FACE_HALF:
+        face = 2
+    else:
+        face = 1
+    dot = dx * wx + dy * wy
+    cos_t = -dot if dot < 0.0 else 0.0
+    if cos_t > 1.0:
+        cos_t = 1.0
+    return (tmin, face, degrees(acos(cos_t)))
+
+
+def pen_ok(theta, face, margin):
+    return theta + margin < RICO[face]
+
+
+class Nav:
     __slots__ = ("w", "h", "tile", "passable", "opaque", "clear", "patrol",
                  "path", "path_goal", "path_i")
 
@@ -147,7 +180,6 @@ class Nav:
         return self.clear[self.idx(x, y)]
 
     def _make_patrol(self):
-        """Серпантинный маршрут по всей карте."""
         step = max(4, min(self.w, self.h) // 7)
         best = {}
         for y in range(1, self.h - 1):
@@ -178,7 +210,6 @@ class Nav:
         return [pts[i] for i in chain]
 
     def los_blocked(self, x0, y0, x1, y1, pad=0.0):
-        """Пересекает ли отрезок непрозрачный тайл."""
         gx = x1 - x0
         gy = y1 - y0
         ln = hypot(gx, gy)
@@ -241,7 +272,6 @@ class Nav:
         return False
 
     def astar(self, sx, sy, gx, gy, max_nodes=1100):
-        """Путь списком мировых точек."""
         from heapq import heappop, heappush
         w = self.w
         h = self.h
@@ -325,7 +355,6 @@ class Nav:
         return None
 
     def route_to(self, me_x, me_y, gx, gy):
-        """Следующая путевая точка к цели с кэшем пути."""
         if self.path:
             wx, wy = self.path[self.path_i]
             if hypot(wx - me_x, wy - me_y) < 46.0:
@@ -358,77 +387,13 @@ class Nav:
         return self.path[look]
 
 
-# --- Геометрия выстрела ---
-
-def ray_obb(ox, oy, dx, dy, cx, cy, hx, hy, ang):
-    """Луч против повёрнутого прямоугольника."""
-    ca = cos(ang)
-    sa = sin(ang)
-    rx = ox - cx
-    ry = oy - cy
-    lx = rx * ca + ry * sa
-    ly = -rx * sa + ry * ca
-    ldx = dx * ca + dy * sa
-    ldy = -dx * sa + dy * ca
-
-    tmin = 0.0
-    axis = -1
-    sgn = 0.0
-    for i, (p, q, h) in enumerate(((lx, ldx, hx), (ly, ldy, hy))):
-        if fabs(q) < 1e-12:
-            if fabs(p) > h:
-                return None
-            continue
-        s = -1.0 if q > 0 else 1.0
-        t1 = (-h - p) / q
-        t2 = (h - p) / q
-        if t1 > t2:
-            t1, t2 = t2, t1
-        if t1 > tmin:
-            tmin = t1
-            axis = i
-            sgn = s
-    if axis < 0:
-        if fabs(ldx) >= fabs(ldy):
-            axis, sgn = 0, (-1.0 if ldx > 0 else 1.0)
-        else:
-            axis, sgn = 1, (-1.0 if ldy > 0 else 1.0)
-    nx = sgn if axis == 0 else 0.0
-    ny = sgn if axis == 1 else 0.0
-    wx = nx * ca - ny * sa
-    wy = nx * sa + ny * ca
-    rel = degrees(wrap(atan2(wy, wx) - ang))
-    arel = rel if rel >= 0.0 else -rel
-    if arel <= FACE_HALF:
-        face = 0
-    elif arel >= 180.0 - FACE_HALF:
-        face = 2
-    else:
-        face = 1
-    dot = dx * wx + dy * wy
-    cos_t = -dot if dot < 0.0 else 0.0
-    if cos_t > 1.0:
-        cos_t = 1.0
-    return (tmin, face, degrees(acos(cos_t)))
-
-
-def pen_ok(theta, face, margin):
-    """Пробивает ли удар с запасом margin."""
-    return theta + margin < RICO[face]
-
-
-# --- Главный класс ---
-
 class Brain(TankProgram):
-    """Ультимативный танк: ракурс + упреждение + уклонение + темп."""
-
     def on_start(self, ctx):
         self.rnd = 12345
         self.last_tick = -1
         self.nav = None
         self.t = 0.0
 
-        # Память о враге
         self.seen = False
         self.et = -99.0
         self.etick = -9999
@@ -438,23 +403,18 @@ class Brain(TankProgram):
         self.e_ax = self.e_ay = 0.0
         self.ehull = 0.0
         self.ehp = HP_MAX
-        self.e_ammo_ready = True
         self.bear_prev = None
         self.bear_t = 0.0
         self.bear_omega = 0.0
         self.flips = []
         self.flip_sign = 0
 
-        # Модели упреждения
         self.m_err = [400.0, 400.0, 400.0]
         self.m_hist = []
-
-        # Уклонение врага
         self.dodge_ema = 0.0
         self.dodge_n = 0
         self.hit_ema = 0.42
 
-        # Бой
         self.side = 1.0
         self.side_until = 0.0
         self.gear = 1
@@ -463,22 +423,12 @@ class Brain(TankProgram):
         self.threat_hot = False
         self.prev_cd = None
         self.prev_enemy = None
-        self.evade = None
         self._cover_goal = None
         self._cover_until = -1.0
 
-        # Адаптация к стилю врага
-        self.foe_uses_rico = False  # использует ли враг ракурс рикошета
-        self.foe_rico_samples = []  # образцы углов врага к нам
-        self.foe_rico_check_tick = 0
-        self.aggressive_mode = False  # переходим в агрессивный режим
-        self.aggressive_until = 0.0
-
-        # Поиск
         self.patrol_order = None
         self.patrol_k = 0
 
-        # Застревание
         self.px = self.py = 0.0
         self.mile = 0.0
         self.stuck_t = 0.0
@@ -525,7 +475,6 @@ class Brain(TankProgram):
         self.cmd_drive = drive
         return Action(drive=drive, turn=turn, turret=turret, fire=fire)
 
-    # --- Модель врага ---
     def _see(self, o, e):
         t = self.t
         if self.seen:
@@ -572,59 +521,10 @@ class Brain(TankProgram):
         self.evx, self.evy = e.vx, e.vy
         self.ehull = e.hull
         self.ehp = e.hp
-        self.e_ammo_ready = e.ammo_ready
         self.et = t
         self.etick = o.tick
         self.seen = True
-        
-        # Адаптация: проверяем, использует ли враг ракурс рикошета
-        self._check_foe_rico(o, me, e)
-        
         self._plan_predictions(o, e)
-
-    def _check_foe_rico(self, o, me, e):
-        """Проверяем, использует ли враг ракурс рикошета.
-        
-        Если угол между курсом врага и линией на нас постоянно находится
-        в диапазоне 30-50°, то враг использует ракурс и мы должны адаптироваться.
-        """
-        if o.tick < self.foe_rico_check_tick + 10:  # проверяем каждые ~10 тиков
-            return
-        self.foe_rico_check_tick = o.tick
-        
-        dx = me.x - e.x
-        dy = me.y - e.y
-        dist = hypot(dx, dy)
-        if dist < 50.0:  # слишком близко - угол не стабилен
-            return
-            
-        # Угол от курса врага до линии на нас
-        to_us = atan2(dy, dx)
-        angle_to_us = degrees(wrap(to_us - e.hull))
-        if angle_to_us < 0:
-            angle_to_us = -angle_to_us
-        
-        # Проверяем, находится ли угол в "мёртвой зоне" ракурса
-        in_rico_zone = (25.0 <= angle_to_us <= 55.0)
-        
-        self.foe_rico_samples.append(in_rico_zone)
-        if len(self.foe_rico_samples) > 10:
-            self.foe_rico_samples.pop(0)
-        
-        # Если в последние 10 проверок враг чаще всего в зоне ракурса
-        if len(self.foe_rico_samples) >= 5:
-            rico_count = sum(self.foe_rico_samples)
-            # Если враг в зоне ракурса в 70% случаев - он использует ракурс
-            self.foe_uses_rico = (rico_count >= len(self.foe_rico_samples) * 0.7)
-            
-            # Переходим в агрессивный режим, если враг использует ракурс
-            if self.foe_uses_rico and not self.aggressive_mode and self.t > self.aggressive_until:
-                # Активируем агрессивный режим на 8 секунд
-                self.aggressive_mode = True
-                self.aggressive_until = self.t + 8.0
-            elif not self.foe_uses_rico and self.t > self.aggressive_until:
-                # Если враг не использует ракурс - выходим из агрессивного режима
-                self.aggressive_mode = False
 
     def _plan_predictions(self, o, e):
         if len(self.m_hist) > 6:
@@ -633,9 +533,7 @@ class Brain(TankProgram):
         x, y = e.x, e.y
         vx, vy = e.vx, e.vy
         tf = 0.42
-        # CV - постоянная скорость
         p_cv = (x + vx * tf, y + vy * tf)
-        # ARC - дуга по угловой скорости
         om = self.e_omega
         sp = hypot(vx, vy)
         if fabs(om) > 0.06 and sp > 30.0:
@@ -646,7 +544,6 @@ class Brain(TankProgram):
                      y - r * (cos(a + da) - cos(a)))
         else:
             p_arc = p_cv
-        # ACC - с ускорением
         p_ac = (x + vx * tf + 0.5 * self.e_ax * tf * tf,
                 y + vy * tf + 0.5 * self.e_ay * tf * tf)
         self.m_hist.append((due, e.x, e.y, p_cv[0], p_cv[1],
@@ -672,39 +569,80 @@ class Brain(TankProgram):
         return 0
 
     def _predict(self, e, mx, my, model=None):
-        """Предсказание позиции врага с учётом его движения.
-        
-        Использует 3 модели: постоянная скорость, дуга по ω, ускорение.
-        """
         if model is None:
             model = self._best_model()
         x, y = e.x, e.y
         vx, vy = e.vx, e.vy
         om = self.e_omega
-        ax = self.e_ax
-        ay = self.e_ay
         t = hypot(x - mx, y - my) / BULLET_SPEED
-        
-        for _ in range(3):  # больше итераций для точности
+        for _ in range(3):
             if model == 1 and fabs(om) > 0.06 and hypot(vx, vy) > 30.0:
-                # Модель дуги: движение по окружности
                 a = atan2(vy, vx)
                 da = om * t
                 r = hypot(vx, vy) / om
                 nx = x + r * (sin(a + da) - sin(a))
                 ny = y - r * (cos(a + da) - cos(a))
-            elif model == 2 and (fabs(ax) > 10.0 or fabs(ay) > 10.0):
-                # Модель с ускорением
-                nx = x + vx * t + 0.5 * ax * t * t
-                ny = y + vy * t + 0.5 * ay * t * t
+            elif model == 2:
+                nx = x + vx * t + 0.5 * self.e_ax * t * t
+                ny = y + vy * t + 0.5 * self.e_ay * t * t
             else:
-                # Модель постоянной скорости (наиболее стабильная)
                 nx = x + vx * t
                 ny = y + vy * t
             t = hypot(nx - mx, ny - my) / BULLET_SPEED
         return nx, ny, t
 
-    # --- Стрельба ---
+    def _pen_band(self, o, me, px, py, phull, d, t_fly):
+        bearing = atan2(py - me.y, px - me.x)
+        om_unc = 0.45 * fabs(self.e_omega) + 0.12
+        margin = SPREAD_DEG + 1.6 + degrees(om_unc * min(t_fly, 0.7))
+        phi = fabs(degrees(wrap(atan2(me.y - py, me.x - px) - phull)))
+        if phi > 90.0:
+            phi = 180.0 - phi
+        bmin = min(fabs(phi - 30.0), fabs(phi - 40.0), fabs(phi - 55.0))
+        if bmin < 12.0:
+            margin += 4.5
+        if margin > 14.0:
+            margin = 14.0
+        half_ang = atan2(20.0 + 7.0, max(d, 60.0))
+        N = 15
+        good = []
+        for k in range(N):
+            a = bearing - half_ang + 2.0 * half_ang * k / (N - 1)
+            dx, dy = cos(a), sin(a)
+            mzx = me.x + dx * MUZZLE
+            mzy = me.y + dy * MUZZLE
+            hit = ray_obb(mzx, mzy, dx, dy, px, py, 20.0, 14.0, phull)
+            if hit is None:
+                good.append(None)
+                continue
+            good.append(a if pen_ok(hit[2], hit[1], margin) else None)
+
+        mid_n = (N - 1) / 2.0
+        best = None
+        k = 0
+        while k < N:
+            if good[k] is None:
+                k += 1
+                continue
+            j = k
+            while j + 1 < N and good[j + 1] is not None:
+                j += 1
+            m = (k + j) // 2
+            key = (j - k, -abs(m - mid_n))
+            if best is None or key > best[0]:
+                best = (key, k, j)
+            k = j + 1
+        if best is None:
+            return None, 0.0, 0.0
+        _, k, j = best
+        a = good[(k + j) // 2]
+        dx, dy = cos(a), sin(a)
+        mzx = me.x + dx * MUZZLE
+        mzy = me.y + dy * MUZZLE
+        hit = ray_obb(mzx, mzy, dx, dy, px, py, 20.0, 14.0, phull)
+        tt = hit[0] if hit is not None else d
+        return (mzx + dx * tt, mzy + dy * tt), good[k], good[j]
+
     def _gun(self, o, e, me):
         if e is None:
             return self._gun_blind(o, me), False
@@ -717,37 +655,6 @@ class Brain(TankProgram):
 
         phull = e.hull + clamp(self.e_omega, -HULL_TURN, HULL_TURN) * min(t_fly, 0.7)
 
-        # ПРОВЕРКА УЯЗВИМОСТИ ВРАГА: ищем углы, где можно пробить броню
-        # Вычисляем угол от курса врага до линии на нас
-        dx_total = me.x - e.x
-        dy_total = me.y - e.y
-        to_us = atan2(dy_total, dx_total)
-        angle_to_us = degrees(wrap(to_us - e.hull))
-        if angle_to_us < 0:
-            angle_to_us = -angle_to_us
-        
-        # Определяем, какую грань мы видим
-        if angle_to_us <= FACE_HALF:
-            face = 0  # лоб
-        elif angle_to_us >= 180.0 - FACE_HALF:
-            face = 2  # корма
-        else:
-            face = 1  # борт
-        
-        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс ИЛИ мы видим его лоб/корму
-        # (где рикошет менее вероятен), атакуем напрямую
-        if self.aggressive_mode or face != 1:  # если не борт - можно бить в центр
-            # В агрессивном режиме или когда видим лоб/корму - целимся в уязвимые точки
-            # Для лба и кормы - центр (рикошет 30° и 60°)
-            # Для борта - центр (рикошет 50°)
-            px, py = e.x, e.y  # центр
-            
-            # Но если враг использует ракурс и мы видим его борт - попробуем бить в край
-            if self.foe_uses_rico and face == 1:
-                # Бьём в переднюю часть борта, где угол к нормали меньше
-                # Это сложно, поэтому пока просто бьём в центр
-                pass
-        
         if d < 62.0:
             err = o.aim_error(px, py)
             step = o.bullet_turn_rate * o.dt
@@ -757,11 +664,7 @@ class Brain(TankProgram):
 
         aim, band_lo, band_hi = self._pen_band(o, me, px, py, phull, d, t_fly)
         if aim is None:
-            # В агрессивном режиме, если нет пробития по геометрии - всё равно стреляем
-            if self.aggressive_mode:
-                aim = (px, py)
-            else:
-                return o.aim_turret(px, py), False
+            return o.aim_turret(px, py), False
 
         a = atan2(aim[1] - me.y, aim[0] - me.x)
         for _ in range(2):
@@ -789,17 +692,10 @@ class Brain(TankProgram):
                          or not self.nav.free(mzx, mzy)):
             return cmd, False
 
-        # Темповый гейт - менее строгий в агрессивном режиме
         err_px = self.m_err[model] ** 0.5
         foe_empty = not e.ammo_ready
-        
-        # В агрессивном режиме - менее строгие требования
-        if self.aggressive_mode:
-            err_ok = ERR_EMPTY * 1.5  # в 1.5 раза менее строгий
-            tf_ok = TF_EMPTY * 1.3
-        else:
-            err_ok = ERR_EMPTY if foe_empty else ERR_READY
-            tf_ok = TF_EMPTY if foe_empty else TF_READY
+        err_ok = ERR_EMPTY if foe_empty else ERR_READY
+        tf_ok = TF_EMPTY if foe_empty else TF_READY
 
         if e.hp <= FINISH_HP:
             err_ok += 16.0
@@ -827,73 +723,6 @@ class Brain(TankProgram):
         self.fired_tick = o.tick
         return cmd, True
 
-    def _pen_band(self, o, me, px, py, phull, d, t_fly):
-        """Ищем самую широкую полосу пробития через корпус врага.
-        
-        Возвращает (точка_прицела, lo, hi) в абсолютных углах; None — пробития нет.
-        """
-        bearing = atan2(py - me.y, px - me.x)
-        
-        # Запас по углу к нормали брони
-        om_unc = 0.45 * fabs(self.e_omega) + 0.12
-        margin = SPREAD_DEG + 1.6 + degrees(om_unc * min(t_fly, 0.7))
-        
-        # Дополнительный запас если враг в зоне ракурса
-        phi = fabs(degrees(wrap(atan2(me.y - py, me.x - px) - phull)))
-        if phi > 90.0:
-            phi = 180.0 - phi
-        bmin = min(fabs(phi - 30.0), fabs(phi - 40.0), fabs(phi - 55.0))
-        if bmin < 12.0:
-            margin += 4.5
-        if margin > 14.0:
-            margin = 14.0
-        
-        # Угол сканирования: шире на ближних дистанциях
-        half_ang = atan2(20.0 + 7.0, max(d, 60.0))
-        N = 15  # больше точек для более точного поиска
-        good = []
-        
-        for k in range(N):
-            a = bearing - half_ang + 2.0 * half_ang * k / (N - 1)
-            dx, dy = cos(a), sin(a)
-            mzx = me.x + dx * MUZZLE
-            mzy = me.y + dy * MUZZLE
-            hit = ray_obb(mzx, mzy, dx, dy, px, py, 20.0, 14.0, phull)
-            if hit is None:
-                good.append(None)
-                continue
-            # Проверяем пробитие с запасом
-            good.append(a if pen_ok(hit[2], hit[1], margin) else None)
-
-        # Ищем самую широкую непрерывную полосу
-        mid_n = (N - 1) / 2.0
-        best = None
-        k = 0
-        while k < N:
-            if good[k] is None:
-                k += 1
-                continue
-            j = k
-            while j + 1 < N and good[j + 1] is not None:
-                j += 1
-            m = (k + j) // 2
-            # Предпочитаем более широкие полосы и ближе к центру
-            key = (j - k, -abs(m - mid_n))
-            if best is None or key > best[0]:
-                best = (key, k, j)
-            k = j + 1
-        
-        if best is None:
-            return None, 0.0, 0.0
-        _, k, j = best
-        a = good[(k + j) // 2]
-        dx, dy = cos(a), sin(a)
-        mzx = me.x + dx * MUZZLE
-        mzy = me.y + dy * MUZZLE
-        hit = ray_obb(mzx, mzy, dx, dy, px, py, 20.0, 14.0, phull)
-        tt = hit[0] if hit is not None else d
-        return (mzx + dx * tt, mzy + dy * tt), good[k], good[j]
-
     def _gun_blind(self, o, me):
         if self.seen and (self.t - self.et) < HUNT_FRESH:
             age = self.t - self.et
@@ -903,34 +732,16 @@ class Brain(TankProgram):
         return o.aim_turret(me.x + cos(me.hull) * 200.0,
                             me.y + sin(me.hull) * 200.0)
 
-    # --- Угроза ---
     def _threat(self, o, e, me):
-        """Обнаружение угрозы от летящего снаряда врага.
-        
-        Улучшенная логика: более точное предсказание траектории снаряда,
-        лучшее определение стороны уклонения, учёт движения врага.
-        """
         if e is not None:
             cd = e.cooldown
-            # Обнаружение выстрела: если враг был заряжен на прошлом тике и теперь в перезарядке
             jumped = self.prev_cd is not None and self.prev_cd < 0.45 and cd > 0.6
             blind = self.prev_cd is None and cd > 0.55
-            
             if jumped or blind:
-                # Снаряд летит из ствола врага в направлении его башни
                 a = e.turret
                 age = 0.0 if jumped else (RELOAD - cd)
                 self.threat = (e.x + cos(a) * MUZZLE, e.y + sin(a) * MUZZLE,
                                cos(a), sin(a), self.t - age)
-            
-            # Обнаружение подготовки к выстрелу: если враг навел башню на нас
-            if e.ammo_ready:
-                bearing_to_us = atan2(me.y - e.y, me.x - e.x)
-                turret_error = fabs(wrap(bearing_to_us - e.turret))
-                if turret_error < radians(5.0):  # башня наведена на нас
-                    # Враг может выстрелить в любой момент - готовимся к уклонению
-                    self.threat_hot = True
-            
             self.prev_cd = cd
             self.prev_enemy = (e.x, e.y, e.turret, e.ammo_ready, o.tick)
         else:
@@ -944,70 +755,84 @@ class Brain(TankProgram):
         if age > 1.6:
             self.threat = None
             return None
-        
-        # Текущая позиция снаряда
         bx += dx * BULLET_SPEED * age
         by += dy * BULLET_SPEED * age
-        
-        # Вектор от нас до снаряда
         rx = bx - me.x
         ry = by - me.y
-        
-        # Относительная скорость (скорость снаряда минус наша скорость)
         vx = dx * BULLET_SPEED - me.vx
         vy = dy * BULLET_SPEED - me.vy
         vv = vx * vx + vy * vy
-        
         if vv < 1.0:
             self.threat = None
             return None
-        
-        # Время до минимального сближения
         t_star = -(rx * vx + ry * vy) / vv
         if t_star <= 0.0:
             self.threat = None
             return None
-        
-        # Минимальное расстояние (мисс-дистанция)
         miss = hypot(rx + vx * t_star, ry + vy * t_star)
-        
-        # Порог уклонения: если снаряд пройдет рядом - уходим
         lim = DODGE_MISS + 18.0 if self.threat_hot else DODGE_MISS
         if miss > lim:
             self.threat = None
             self.threat_hot = False
             return None
-        
-        # Определяем сторону уклонения: вбок от линии полёта снаряда
         perp = dx * (me.y - by) - dy * (me.x - bx)
         if perp > 2.0:
             side = 1.0
         elif perp < -2.0:
             side = -1.0
         else:
-            # Если снаряд летит прямо на нас - уходим в сторону, где у нас больше пространства
             lat = dx * me.vy - dy * me.vx
             side = 1.0 if lat >= 0.0 else -1.0
-        
-        # Проверяем, нет ли стены в выбранной стороне
         ex, ey = -dy * side, dx * side
         if self.nav and self.nav.clearance(me.x + ex * DODGE_CLEAR,
                                            me.y + ey * DODGE_CLEAR) < 20.0:
-            # Смена стороны если нет пространства
             ex, ey = -ex, -ey
-            side = -side
-        
-        # Уклонение: не только вбок, но и немного назад/вперёд для лучшего манёвра
         ux, uy = (ex - dx * 0.35), (ey - dy * 0.35)
         ln = hypot(ux, uy)
         if ln > 1e-6:
             ux /= ln
             uy /= ln
-        
         self.threat_hot = True
         return (ux, uy, t_star, miss, dx, dy)
 
-    # --- Движение ---
+    def _dodge_move(self, o, me, e, threat):
+        ux, uy, t_star, miss, bdx, bdy = threat
+        base = atan2(-bdy, -bdx) + self.side * ANGLE_LOCK
+        hx, hy = cos(base), sin(base)
+        dot = ux * hx + uy * hy
+        if miss < 13.0 and t_star > 0.28 and fabs(dot) < 0.45:
+            err = wrap(atan2(uy, ux) - me.hull)
+            return clamp(err * 2.6, -1.0, 1.0), 1.0
+        err = wrap(base - me.hull)
+        turn = clamp(err * TRACK_GAIN, -1.0, 1.0)
+        gear = 1.0 if dot >= 0.0 else -1.0
+        if self.nav is not None:
+            px = me.x + ux * DODGE_CLEAR
+            py = me.y + uy * DODGE_CLEAR
+            if self.nav.clearance(px, py) < 18.0:
+                err = wrap(atan2(uy, ux) - me.hull)
+                return clamp(err * 2.6, -1.0, 1.0), 1.0
+        return turn, gear * 1.0
+
+    def _cover_spot(self, o, me, e, d):
+        best = None
+        nav = self.nav
+        if nav is None:
+            return None
+        for k in range(14):
+            ang = k * (TAU / 14) + 0.2
+            for dist in (90.0, 170.0, 260.0):
+                px = me.x + cos(ang) * dist
+                py = me.y + sin(ang) * dist
+                if not nav.free(px, py) or nav.clearance(px, py) < 26.0:
+                    continue
+                if not nav.los_blocked(px, py, e.x, e.y):
+                    continue
+                score = -dist + nav.clearance(px, py) * 0.5
+                if best is None or score > best[0]:
+                    best = (score, px, py)
+        return None if best is None else (best[1], best[2])
+
     def _steer(self, o, me, ux, uy, hull_target, throttle):
         if hull_target is None:
             hull_target = atan2(uy, ux)
@@ -1032,77 +857,6 @@ class Brain(TankProgram):
         t = self.t
         los_clear = not (self.nav and self.nav.los_blocked(me.x, me.y, e.x, e.y))
 
-        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс ИЛИ мы видим его лоб/корму - атакуем напрямую
-        dx_total = me.x - e.x
-        dy_total = me.y - e.y
-        to_us = atan2(dy_total, dx_total)
-        angle_to_us = degrees(wrap(to_us - e.hull))
-        if angle_to_us < 0:
-            angle_to_us = -angle_to_us
-        
-        if angle_to_us <= FACE_HALF:
-            face = 0  # лоб
-        elif angle_to_us >= 180.0 - FACE_HALF:
-            face = 2  # корма
-        else:
-            face = 1  # борт
-        
-        # АГРЕССИВНЫЙ РЕЖИМ: если враг использует ракурс ИЛИ мы видим его лоб/корму
-        if self.aggressive_mode or face != 1:  # если не борт - можно атаковать напрямую
-            # В агрессивном режиме не используем ракурс - атакуем напрямую
-            want_d = PRESS_RANGE if me_ready else (KILL_RANGE if e.hp <= FINISH_HP else STANDOFF)
-            
-            # Укрытие всё равно важно
-            if not me_ready and foe_ready and d < HIDE_RANGE and t > self._cover_until:
-                spot = self._cover_spot(o, me, e, d)
-                if spot is not None:
-                    self._cover_goal = spot
-                    self._cover_until = t + 1.0
-            if t < self._cover_until and self._cover_goal is not None:
-                gx, gy = self._cover_goal
-                u2 = (gx - me.x, gy - me.y)
-                ln = hypot(u2[0], u2[1])
-                if ln > 1e-6:
-                    u2 = (u2[0] / ln, u2[1] / ln)
-                else:
-                    u2 = (1.0, 0.0)
-                # В агрессивном режиме - прямой курс на врага
-                return self._steer(o, me, u2[0], u2[1], bearing, 1.0)
-            
-            # Прямой курс на врага с каруселью
-            if pressing and not los_clear and self.nav is not None:
-                gx = e.x - ux * want_d
-                gy = e.y - uy * want_d
-                wx, wy = self.nav.route_to(me.x, me.y, gx, gy)
-                u2 = (wx - me.x, wy - me.y)
-                ln = hypot(u2[0], u2[1])
-                if ln > 1e-6:
-                    u2 = (u2[0] / ln, u2[1] / ln)
-                else:
-                    u2 = (ux, uy)
-                turn, drive = self._steer(o, me, u2[0], u2[1], None, 1.0)
-                return turn, drive
-            
-            # Карусель: кружим вокруг врага, но с меньшим ракурсом
-            best = None
-            for k in (0.85, 1.0, 1.15):
-                ang = atan2(me.y - e.y, me.x - e.x) + self.side * k
-                gx = e.x + cos(ang) * want_d
-                gy = e.y + sin(ang) * want_d
-                c = self.nav.clearance(gx, gy) if self.nav else 100.0
-                score = c - 30.0 * k
-                if best is None or score > best[0]:
-                    best = (score, gx, gy)
-            gx, gy = best[1], best[2]
-            u2 = (gx - me.x, gy - me.y)
-            ln = hypot(u2[0], u2[1])
-            if ln > 1e-6:
-                u2 = (u2[0] / ln, u2[1] / ln)
-            else:
-                u2 = (ux, uy)
-            turn, drive = self._steer(o, me, u2[0], u2[1], bearing, 0.95)
-            return turn, drive
-
         # Смена стороны ракурса
         if t > self.side_until:
             safe = (not foe_ready) or d > 520.0 or not los_clear
@@ -1125,16 +879,6 @@ class Brain(TankProgram):
         if me.hp <= DMG and foe_ready and e.hp > FINISH_HP:
             want_d = HIDE_RANGE + 90.0
         pressing = (not foe_ready) and me_ready
-        
-        # АГРЕССИВНЫЙ ПОДХОД: если враг пуст - давим независимо от ракурса
-        if pressing:
-            # Враг пуст и мы заряжены - это наше время атаковать!
-            # Не используем ракурс, а атакуем напрямую
-            want_d = PRESS_RANGE
-            # Увеличиваем агрессивность
-            if self.t > self.aggressive_until:
-                self.aggressive_mode = True
-                self.aggressive_until = self.t + 3.0
 
         # Укрытие
         if not me_ready and foe_ready and d < HIDE_RANGE and t > self._cover_until:
@@ -1233,79 +977,6 @@ class Brain(TankProgram):
                 best_a = a
         return clamp(wrap(best_a - me.hull) * 2.0, -1.0, 1.0)
 
-    def _dodge_move(self, o, me, e, threat):
-        """Уклонение от летящего снаряда.
-        
-        Стратегия: уводим танк с линии полёта снаряда, сохраняя ракурс защиты.
-        """
-        ux, uy, t_star, miss, bdx, bdy = threat
-        
-        # Определяем направление откуда летит снаряд
-        bullet_dir = atan2(bdy, bdx)
-        
-        # Если снаряд очень близко и летит прямо на нас - экстренное уклонение
-        if miss < 13.0 and t_star > 0.28:
-            # Снаряд почти попадает - максимальный манёвр
-            err = wrap(atan2(uy, ux) - me.hull)
-            return clamp(err * 2.6, -1.0, 1.0), 1.0
-        
-        # Стандартное уклонение: держим угол ракурса к линии снаряда
-        # Это защищает от рикошета если снаряд всё же попадёт
-        base = atan2(-bdy, -bdx) + self.side * ANGLE_LOCK
-        hx, hy = cos(base), sin(base)
-        dot = ux * hx + uy * hy
-        
-        err = wrap(base - me.hull)
-        turn = clamp(err * TRACK_GAIN, -1.0, 1.0)
-        gear = 1.0 if dot >= 0.0 else -1.0
-        
-        # Проверяем пространство для манёвра
-        if self.nav is not None:
-            px = me.x + ux * DODGE_CLEAR
-            py = me.y + uy * DODGE_CLEAR
-            if self.nav.clearance(px, py) < 18.0:
-                # Нет пространства - экстренный разворот
-                err = wrap(atan2(uy, ux) - me.hull)
-                return clamp(err * 2.6, -1.0, 1.0), 1.0
-        
-        return turn, gear * 1.0
-
-    def _cover_spot(self, o, me, e, d):
-        """Поиск точки укрытия, где линия огня врага нас не видит.
-        
-        Улучшенная логика: ищем точки ближе к врагу для быстрого возврата в бой.
-        """
-        best = None
-        nav = self.nav
-        if nav is None:
-            return None
-        
-        # Ищем укрытия на разных дистанциях
-        for dist in (80.0, 140.0, 200.0):
-            # Проверяем больше направлений
-            for k in range(20):
-                ang = k * (TAU / 20) + 0.1
-                px = me.x + cos(ang) * dist
-                py = me.y + sin(ang) * dist
-                if not nav.free(px, py) or nav.clearance(px, py) < 26.0:
-                    continue
-                if not nav.los_blocked(px, py, e.x, e.y):
-                    continue
-                
-                # Оценка: предпочитаем ближние точки с хорошим обзором
-                # и возможностью быстрого возврата в бой
-                angle_to_enemy = atan2(e.y - py, e.x - px)
-                bearing = atan2(e.y - me.y, e.x - me.x)
-                angle_diff = fabs(wrap(angle_to_enemy - bearing))
-                
-                # Score: ближе + больше пространства + лучше позиция для возврата
-                score = -dist * 0.5 + nav.clearance(px, py) * 0.3 - angle_diff * 50.0
-                if best is None or score > best[0]:
-                    best = (score, px, py)
-        
-        return None if best is None else (best[1], best[2])
-
-    # --- Поиск ---
     def _hunt(self, o, me):
         t = self.t
         gx = gy = None
@@ -1368,7 +1039,6 @@ class Brain(TankProgram):
             g = pts[self.patrol_k % n]
         return g
 
-    # --- Застревание ---
     def _watch_stuck(self, o, me):
         self.mile += hypot(me.x - self.px, me.y - self.py)
         self.px, self.py = me.x, me.y

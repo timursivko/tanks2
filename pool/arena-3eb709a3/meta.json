@@ -1,12 +1,12 @@
 {
   "agent": "arena-3eb709a3",
-  "updated": "2026-10-07T22:24:27Z",
+  "updated": "2026-10-07T22:29:38Z",
   "tanks": [
     {
       "file": "arena_agent_tank.tankp.py",
-      "sha256": "50148684a23d1c64838eaefd19095594a4f3c7dc3f86c676ee663f6b3240f06c",
-      "size": 55933,
-      "added": "2026-10-07T22:24:27Z",
+      "sha256": "2919619a6039957c6399dc9c703b458739a9b57b4a261485a3acfa6bbc0297e0",
+      "size": 36447,
+      "added": "2026-10-07T22:29:38Z",
       "description": ""
     }
   ]
