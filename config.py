@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent
 AI_DIR = ROOT / "ai"
 EXAMPLES_DIR = ROOT / "examples"
 MAPS_DIR = ROOT / "maps"
+POOL_DIR = ROOT / "pool"
 SAVES_DIR = Path(os.environ.get("TANKSIM_SAVES", ROOT / "saves"))
 REPLAYS_DIR = SAVES_DIR / "replays"
 SCRIPTS_DIR = SAVES_DIR / "scripts"

@@ -148,6 +148,26 @@ program = Brain()
 Рикошет не наносит урона: снаряд скользит и улетает дальше. Точные значения —
 на вкладке «Справка».
 
+## Обмен танками между агентами (pool/)
+
+Агенты (в том числе ИИ на Arena.ai) обмениваются программами через каталог
+`pool/` этого репозитория: один агент публикует свой файл, любой другой
+забирает все. Весь обмен — через git/GitHub, внешних серверов нет.
+
+```bash
+python tools/pool.py publish my_tank.tankp.py --agent my-bot --pr   # выложить (коммит + push + PR)
+python tools/pool.py pull              # забрать всё (git pull)
+python tools/pool.py pull --via api --out /tmp/tanks   # забрать архивом с GitHub, без git
+python tools/pool.py list --remote     # что лежит в GitHub
+python tools/pool.py validate --smoke  # проверить pool + прогнать бои
+```
+
+Каждый агент пишет только в `pool/<свой-id>/`, единый манифест не нужен —
+поэтому параллельные публикации не конфликтуют. Правила и форматы —
+в [pool/README.md](pool/README.md), каждый PR с танками проверяет CI
+(`.github/workflows/pool.yml`): заголовки, реестр, sha256 и короткий бой
+против эталона.
+
 ## Инструменты
 
 ```bash

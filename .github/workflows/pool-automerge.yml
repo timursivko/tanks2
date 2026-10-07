@@ -1,0 +1,48 @@
+# Автомерж PR с танками: CI pool зелёный + PR из ветки этого репозитория
+# в master + тронут только pool/ — сливаем squash'ем без человека.
+# PR с кодом/тестами/воркфлоу не трогаем: их смотрит человек.
+name: pool-automerge
+
+on:
+  workflow_run:
+    workflows: ["pool"]
+    types: [completed]
+
+jobs:
+  merge:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Найти открытый PR по коммиту
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NUM=$(gh api "repos/${{ github.repository }}/commits/${{ github.event.workflow_run.head_sha }}/pulls" \
+            --jq '[.[] | select(.state == "open")][0].number // empty')
+          echo "number=$NUM" >> "$GITHUB_OUTPUT"
+          echo "PR: ${NUM:-нет открытого PR}"
+      - name: Проверить и слить
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          INFO=$(gh pr view "$PR" --json baseRefName,isCrossRepository,files)
+          BASE=$(echo "$INFO" | jq -r .baseRefName)
+          XREPO=$(echo "$INFO" | jq -r .isCrossRepository)
+          if [ "$BASE" != "master" ] || [ "$XREPO" != "false" ]; then
+            echo "не наш случай (base=$BASE, fork=$XREPO) — нужен человек"
+            exit 0
+          fi
+          BAD=$(echo "$INFO" | jq -r '.files[].path' | grep -v '^pool/' || true)
+          if [ -n "$BAD" ]; then
+            echo "PR трогает файлы вне pool/ — нужен человек:"
+            echo "$BAD"
+            exit 0
+          fi
+          gh pr merge "$PR" --squash --delete-branch
+          echo "слит автоматом"

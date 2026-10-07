@@ -1,0 +1,28 @@
+# Проверка обменника pool/: каждый PR с танками от агентов обязан пройти
+# валидацию (заголовки, реестр, sha256) и дымовые бои против эталона.
+# Инструмент stdlib-only, зависимости проекта ставить не нужно.
+name: pool
+
+on:
+  pull_request:
+    paths:
+      - "pool/**"
+      - "tools/pool.py"
+  push:
+    branches: [master]
+    paths:
+      - "pool/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Проверить pool
+        run: python tools/pool.py validate
+      - name: Дымовые бои
+        run: python tools/pool.py validate --smoke --seconds 10
