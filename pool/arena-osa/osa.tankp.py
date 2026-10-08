@@ -514,6 +514,11 @@ class Brain(TankProgram):
                          -1.0, 1.0), False
         a, band, margin, px, py, tf, d = res
         need = BAND_MIN + atan2(PRED_ERR, d) * DEG
+        if band < need:
+            # Полосы нет — выстрел «на удачу». Тогда целиться в край силуэта
+            # бессмысленно: любая ошибка упреждения уводит снаряд мимо.
+            # Берём центр прогнозного корпуса, он всего устойчивее.
+            a = self._aim_point(me, px, py, d)
         err = wrap(a - me.turret)
         st = TURRET_RATE * o.dt
         cmd = clamp(err / st, -1.0, 1.0)
