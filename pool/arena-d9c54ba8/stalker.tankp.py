@@ -62,7 +62,7 @@ ANGLE_LOCK = radians(35.0)   # середина мёртвой зоны [30..40]
 D_MIN = 240.0                # ближняя граница маятника
 D_MAX = 300.0                # дальняя граница маятника
 POINT_BLANK = 78.0           # в упор не стреляем (дуло внутри корпуса -> рикошет)
-MARGIN_WIN = 6.0             # запас пробития внутри окна прицеливания, град
+MARGIN_WIN = 4.0             # запас пробития внутри окна прицеливания, град
 RADAR_MARGIN = 8.0           # дополнительный запас, когда враг не виден
 TRACK_GAIN = 6.0             # усиление доворота корпуса на ракурс
 AZ_LEAD = 0.07               # с: опережение корпуса по угловой скорости азимута
@@ -200,8 +200,8 @@ class Brain(TankProgram):
         self.snap_t = -10.0
         self.snap = (0.0,) * 15
         # модели упреждения: EMA ошибки против радара
-        self.merr = [25.0] * 7      # позиция + курс (для выбора)
-        self.merr_pos = [25.0] * 7  # только позиция (для гейта)
+        self.merr = [25.0] * 8      # позиция + курс (для выбора)
+        self.merr_pos = [25.0] * 8  # только позиция (для гейта)
         self.eax = self.eay = 0.0
         self.prev_evx = self.prev_evy = 0.0
         self.prev_evt = -10.0
@@ -273,6 +273,14 @@ class Brain(TankProgram):
             fy = my + mvy * t + 0.5 * may * t * t
             az = atan2(fy - hy, fx - hx)
             return hx, hy, az - rel
+        if m == 7:
+            # CVA-позиция + курс «зона» (враг держит ракурс к нам)
+            hx = x + vx * t + 0.5 * ax * t * t
+            hy = y + vy * t + 0.5 * ay * t * t
+            fx = mx + mvx * t + 0.5 * max * t * t
+            fy = my + mvy * t + 0.5 * may * t * t
+            az = atan2(fy - hy, fx - hx)
+            return hx, hy, az + rel
         # m == 3: дуга (постоянные скорость и угловая скорость)
         sp = hypot(vx, vy)
         if fabs(w) < 0.05 or sp < 2.0:
@@ -538,8 +546,10 @@ class Brain(TankProgram):
     def _maybe_switch_side(self, o, t, az, dist_e):
         me = o.me
         want = az - self.side * ANGLE_LOCK
-        wall_close = o.map.clearance(me.x + cos(want) * 90.0,
+        # смена стороны только когда реально упёрлись в стену (A* не вывез)
+        wall_close = (o.map.clearance(me.x + cos(want) * 90.0,
                                      me.y + sin(want) * 90.0) < 55.0
+                     and me.speed < 30.0)
         if t - self.last_side_t < SIDE_MIN_T:
             self.next_side = t + 0.3
         elif wall_close:
@@ -724,8 +734,8 @@ class Brain(TankProgram):
         if self.prev_mt > 0.0:
             mdt = t - self.prev_mt
             if mdt > 0.005:
-                self.me_ax += ((me.vx - self.prev_mvx) / mdt - self.me_ax) * 0.5
-                self.me_ay += ((me.vy - self.prev_mvy) / mdt - self.me_ay) * 0.5
+                self.me_ax += ((me.vx - self.prev_mvx) / mdt - self.me_ax) * 0.7
+                self.me_ay += ((me.vy - self.prev_mvy) / mdt - self.me_ay) * 0.7
         self.prev_mvx = me.vx
         self.prev_mvy = me.vy
         self.prev_mt = t
@@ -749,7 +759,7 @@ class Brain(TankProgram):
             fy = self.ry
             (sx, sy, sh, svx, svy, sw, sax, say,
              smx, smy, smvx, smvy, srel, smax, smay) = self.snap
-            for m in range(7):
+            for m in range(8):
                 px, py, ph = self._model_from(sx, sy, sh, svx, svy, sw, m, dt,
                                               sax, say, smx, smy, smvx, smvy,
                                               srel, smax, smay)
