@@ -94,6 +94,9 @@ AWAY_W = 400.0
 AWAY_N0 = 120.0         # крутизна отодвигания
 KO_MIN = 50.0          # обычный рубеж реверса
 KO_MAX = 150.0
+SEARCH_R = 110.0       # дошли до точки поиска — берём следующую
+SEARCH_T = 4.0
+PATROL_T = 15.0        # раньше этого времени не патрулируем         # или через столько секунд, если уперлись
 ESC_T = 30.0         # насколько отходим от того, кто не отступает
 R_SPRINT = 130.0       # дальше бортовой разворот не крутит линию быстрее 2.6
 
@@ -213,6 +216,9 @@ class Brain(TankProgram):
         self.side_t = -9.0
         self.threat_rate = 0.0
         self.sprint_t = -9.0
+        self.search_pts = None
+        self.search_i = 0
+        self.search_t = -9.0
         self.away = AWAY_MID
         self.away_n = 0.0
         self.away_s = 0.0
@@ -649,10 +655,34 @@ class Brain(TankProgram):
         return ((best[1] + 0.5) * tile, (best[2] + 0.5) * tile)
 
     def _hunt(self, o, me):
-        if o.map is not None and len(o.map.spawns) > 1:
-            sp = o.map.spawns[1 - o.tank]
-            gx = sp.x
-            gy = sp.y
+        # Точка чужого респауна — только первая догадка. Если враг ушёл оттуда,
+        # стоять на ней вечно значит подарить ничью по времени: обходим карту
+        # по кольцу из ключевых точек, пока не поймаем его в поле зрения.
+        g = o.map
+        pts = self.search_pts
+        if pts is None and g is not None:
+            w = g.width * g.tile_size
+            h = g.height * g.tile_size
+            pts = [(w * 0.5, h * 0.5), (w * 0.25, h * 0.25),
+                   (w * 0.75, h * 0.25), (w * 0.75, h * 0.75),
+                   (w * 0.25, h * 0.75)]
+            if len(g.spawns) > 1:
+                sp = g.spawns[1 - o.tank]
+                pts.insert(0, (float(sp.x), float(sp.y)))
+            self.search_pts = pts
+            self.search_i = 0
+            self.search_t = self.t
+        if pts and self.t < PATROL_T:
+            # Пока время не поджимает, первая догадка (чужой респаун) не хуже
+            # обхода: патруль уводит из укрытий и подставляет на открытом.
+            gx, gy = pts[0]
+        elif pts:
+            gx, gy = pts[self.search_i]
+            if (hypot(gx - me.x, gy - me.y) < SEARCH_R
+                    or self.t - self.search_t > SEARCH_T):
+                self.search_i = (self.search_i + 1) % len(pts)
+                self.search_t = self.t
+                gx, gy = pts[self.search_i]
         else:
             gx = me.x + cos(me.hull) * 200.0
             gy = me.y + sin(me.hull) * 200.0
