@@ -87,6 +87,14 @@ STUCK_DIST = 12.0
 
 R_FIGHT = 210.0        # рубеж боя: ближе чужой ракурс не сбить,
                        # дальше снаряд летит слишком долго
+
+CLOSE_R = 150.0        # вблизи: там решается ножевой размен
+AWAY_MID = 0.62        # враг уходит (>0.62) или сам лезет в упор (<0.62)
+AWAY_W = 400.0
+AWAY_N0 = 120.0         # крутизна отодвигания
+KO_MIN = 50.0          # обычный рубеж реверса
+KO_MAX = 150.0
+ESC_T = 30.0         # насколько отходим от того, кто не отступает
 R_SPRINT = 130.0       # дальше бортовой разворот не крутит линию быстрее 2.6
 
 FIRE_MARGIN = 3.0      # запас от порога рикошета, градусы
@@ -205,6 +213,10 @@ class Brain(TankProgram):
         self.side_t = -9.0
         self.threat_rate = 0.0
         self.sprint_t = -9.0
+        self.away = AWAY_MID
+        self.away_n = 0.0
+        self.away_s = 0.0
+        self.keep_out = KO_MIN
         self.free = False
 
         # маршрут
@@ -311,6 +323,18 @@ class Brain(TankProgram):
         los = atan2(dy, dx)
         rate = self._los_rate(dx, dy, me)
 
+        # Кто навязывает упор? Если враг вблизи пятится — он стрелок-дистанционщик,
+        # догонять его себе дороже: пока мы сближаемся, он нас расстреливает.
+        # Если сам прёт — наоборот, встреча на нашем ходу нам выгодна.
+        if d < CLOSE_R:
+            rad = (dx * self.evx + dy * self.evy) / d
+            self.away_n += 1.0
+            self.away_s += 1.0 if rad > 10.0 else 0.0
+            inst = (self.away_s + AWAY_MID * AWAY_N0) / (self.away_n + AWAY_N0)
+            self.away += clamp(inst - self.away, -0.01, 0.01)
+            self.keep_out = clamp(KO_MIN + AWAY_W * (AWAY_MID - self.away),
+                                  KO_MIN, KO_MAX)
+
         # --- манёвр в паузу чужой перезарядки -------------------------------
         # В упор линия визирования от бортового разворота крутится как v/d —
         # на 50 px это 3.8 рад/с против 2.6 рад/с предела чужого корпуса:
@@ -384,7 +408,13 @@ class Brain(TankProgram):
         rf = self._r_fight()
         if d > rf + 60.0:
             return 1.0
-        if d < rf - 160.0:
+        ko = self.keep_out
+        # Ничья по времени даёт пол-очка обеим. Кто впереди по ХП, тому она
+        # крадёт победу: после ESC_T такой танк перестаёт держать дистанцию
+        # и дожимает. Кто позади — наоборот, держит и тянет время.
+        if self.t > ESC_T and o.me.hp > self.ehp + 0.5:
+            ko = KO_MIN
+        if d < ko:
             return -0.85
         return 0.95
 
