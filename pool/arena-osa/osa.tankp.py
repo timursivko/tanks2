@@ -94,6 +94,7 @@ AWAY_W = 400.0
 AWAY_N0 = 120.0         # крутизна отодвигания
 KO_MIN = 50.0          # обычный рубеж реверса
 KO_MAX = 200.0
+REV_PROBE = 60.0    # сколько места нужно сзади для заднего хода
 SEARCH_R = 110.0       # дошли до точки поиска — берём следующую
 SEARCH_T = 4.0
 PATROL_T = 15.0        # раньше этого времени не патрулируем         # или через столько секунд, если уперлись
@@ -425,6 +426,12 @@ class Brain(TankProgram):
                                    and o.me.hp > HP_MAX - 0.5)):
             ko = KO_MIN
         if d < ko:
+            # Не пятиться в стену. Задним ходом в упор танк упирается и стоит
+            # под выстрелами; на тесной карте так проходит почти половина боя.
+            bx = self.mx - cos(self.hull_now) * REV_PROBE
+            by = self.my - sin(self.hull_now) * REV_PROBE
+            if not self._free_pt(bx, by):
+                return 0.95
             return -0.85
         return 0.95
 
