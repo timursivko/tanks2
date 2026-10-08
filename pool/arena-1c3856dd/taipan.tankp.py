@@ -24,25 +24,25 @@ HULL_FRONT_HALF = 35.0
 RICO = (30.0, 50.0, 60.0)
 
 # --- настройки боя ---------------------------------------------------------
-BAND = 35.5                 # ракурс к линии угрозы
-BAND_STICK = 0.35           # гистерезис выбора стороны ракурса, рад
-D_STAND = 235.0             # рабочая дистанция
-D_DASH = 52.0               # цель при дожиме
-D_CLOSE = 92.0              # ближе не подпускаем (кроме дожима)
-DASH_MAX = 150.0            # с какой дистанции имеет смысл дожим
-DASH_CD = 0.55              # чужой перезаряд, при котором идём в дожим
-PEND_MIN = 0.45             # полупериод маятника, с
+BAND = 35.5  # ракурс к линии угрозы
+BAND_STICK = 0.35  # гистерезис выбора стороны ракурса, рад
+D_STAND = 235.0  # рабочая дистанция
+D_DASH = 52.0  # цель при дожиме
+D_CLOSE = 92.0  # ближе не подпускаем (кроме дожима)
+DASH_MAX = 150.0  # с какой дистанции имеет смысл дожим
+DASH_CD = 0.55  # чужой перезаряд, при котором идём в дожим
+PEND_MIN = 0.45  # полупериод маятника, с
 PEND_MAX = 1.05
 GEAR_FLIP = 0.45
 THROTTLE = 0.95
 TURN_COST = 0.5
 TRACK_GAIN = 4.5
-GATE_MARGIN = 2.5           # запас пробития для выстрела, град
-GATE_LOOSE = -5.0           # выстрел «на удачу», когда у врага пусто
+GATE_MARGIN = 2.5  # запас пробития для выстрела, град
+GATE_LOOSE = -5.0  # выстрел «на удачу», когда у врага пусто
 FLEE_HP = 4.0
-ERR_FIRE = 60.0             # допуск по ошибке прогноза, px (как у mongoose)
-TF_MAX = 1.35               # предел времени полёта, с
-RACKUR_FULL = 0.28          # рад (16°): на такой ошибке курса газ срезан полностью
+ERR_FIRE = 60.0  # допуск по ошибке прогноза, px (как у mongoose)
+TF_MAX = 1.35  # предел времени полёта, с
+RACKUR_FULL = 0.28  # рад (16°): на такой ошибке курса газ срезан полностью
 
 TAU = 2.0 * pi
 INF = float("inf")
@@ -153,8 +153,18 @@ def pen_ok(theta, face, margin=0.0):
 # карта
 # ---------------------------------------------------------------------------
 class Nav:
-    __slots__ = ("w", "h", "ts", "free", "opq", "clear", "path", "goal", "pi_",
-                 "spawns")
+    __slots__ = (
+        "w",
+        "h",
+        "ts",
+        "free",
+        "opq",
+        "clear",
+        "path",
+        "goal",
+        "pi_",
+        "spawns",
+    )
 
     def __init__(self, mv):
         self.ts = ts = mv.tile_size
@@ -266,6 +276,7 @@ class Nav:
 
     def astar(self, sx, sy, gx, gy, limit=1400):
         import heapq
+
         ts = self.ts
         w = self.w
         h = self.h
@@ -314,9 +325,9 @@ class Nav:
                 if ng < gscore.get(nb, INF):
                     gscore[nb] = ng
                     came[nb] = base
-                    heapq.heappush(open_heap,
-                                   (ng + abs(nx - g_tx) + abs(ny - g_ty),
-                                    nx, ny))
+                    heapq.heappush(
+                        open_heap, (ng + abs(nx - g_tx) + abs(ny - g_ty), nx, ny)
+                    )
         if not found:
             return []
         out = []
@@ -405,24 +416,30 @@ class Brain(TankProgram):
             dt = t - self.et
             if 0.0005 < dt < 0.25:
                 om = wrap(e.hull - self.ehull) / dt
-                self.e_omega = self.e_omega * 0.7 + \
-                    clamp(om, -HULL_TURN * 1.4, HULL_TURN * 1.4) * 0.3
-                self.e_ax = self.e_ax * 0.8 + clamp((e.vx - self.evx) / dt, -900.0, 900.0) * 0.2
-                self.e_ay = self.e_ay * 0.8 + clamp((e.vy - self.evy) / dt, -900.0, 900.0) * 0.2
+                self.e_omega = (
+                    self.e_omega * 0.7
+                    + clamp(om, -HULL_TURN * 1.4, HULL_TURN * 1.4) * 0.3
+                )
+                self.e_ax = (
+                    self.e_ax * 0.8 + clamp((e.vx - self.evx) / dt, -900.0, 900.0) * 0.2
+                )
+                self.e_ay = (
+                    self.e_ay * 0.8 + clamp((e.vy - self.evy) / dt, -900.0, 900.0) * 0.2
+                )
             elif dt >= 0.5:
                 self.e_omega *= 0.4
         me = o.me
         bear = atan2(e.y - me.y, e.x - me.x)
         if self.bear_prev is not None and 0.0005 < t - self.bear_t < 0.25:
             om_b = wrap(bear - self.bear_prev) / (t - self.bear_t)
-            self.bear_omega = self.bear_omega * 0.7 + \
-                clamp(om_b, -4.0, 4.0) * 0.3
+            self.bear_omega = self.bear_omega * 0.7 + clamp(om_b, -4.0, 4.0) * 0.3
         self.bear_prev = bear
         self.bear_t = t
         if self.prev_cd is not None and e.cooldown > self.prev_cd + 0.4:
             ang = e.turret
-            self.threats.append((e.x + cos(ang) * MUZ, e.y + sin(ang) * MUZ,
-                                 cos(ang), sin(ang), t))
+            self.threats.append(
+                (e.x + cos(ang) * MUZ, e.y + sin(ang) * MUZ, cos(ang), sin(ang), t)
+            )
             if len(self.threats) > 3:
                 del self.threats[0]
         self.prev_cd = e.cooldown
@@ -440,7 +457,7 @@ class Brain(TankProgram):
         self.et = t
         self.seen = True
 
-    MODEL_HORIZON = 9          # тиков вперёд для проверки моделей (0.15 с)
+    MODEL_HORIZON = 9  # тиков вперёд для проверки моделей (0.15 с)
 
     def _learn_models(self, tick, me, o):
         """Сверяем предсказания моделей с фактом и ведём их ошибки (EMA).
@@ -468,7 +485,7 @@ class Brain(TankProgram):
             if idx < len(errs):
                 q.append((tick + self.MODEL_HORIZON, idx, ph))
         if len(q) > 64:
-            del q[:len(q) - 64]
+            del q[: len(q) - 64]
 
     def _best_model(self):
         errs = self.model_err
@@ -488,7 +505,7 @@ class Brain(TankProgram):
     def _advance_threats(self, me):
         live = []
         keep = []
-        for (x0, y0, dx, dy, t0) in self.threats:
+        for x0, y0, dx, dy, t0 in self.threats:
             age = self.t - t0
             bx = x0 + dx * BULLET * age
             by = y0 + dy * BULLET * age
@@ -506,7 +523,7 @@ class Brain(TankProgram):
 
     def _incoming(self, me):
         best = None
-        for (bx, by, dx, dy, t0) in getattr(self, "_live", ()):
+        for bx, by, dx, dy, t0 in getattr(self, "_live", ()):
             rx = me.x - bx
             ry = me.y - by
             along = dx * rx + dy * ry
@@ -569,9 +586,15 @@ class Brain(TankProgram):
             _due, cx, cy, arx, ary, acx, acy = h.pop(0)
             if e is not None:
                 fx, fy = e.x, e.y
-                self.m_err[0] = self.m_err[0] * 0.88 + ((fx - cx) ** 2 + (fy - cy) ** 2) * 0.12
-                self.m_err[1] = self.m_err[1] * 0.88 + ((fx - arx) ** 2 + (fy - ary) ** 2) * 0.12
-                self.m_err[2] = self.m_err[2] * 0.88 + ((fx - acx) ** 2 + (fy - acy) ** 2) * 0.12
+                self.m_err[0] = (
+                    self.m_err[0] * 0.88 + ((fx - cx) ** 2 + (fy - cy) ** 2) * 0.12
+                )
+                self.m_err[1] = (
+                    self.m_err[1] * 0.88 + ((fx - arx) ** 2 + (fy - ary) ** 2) * 0.12
+                )
+                self.m_err[2] = (
+                    self.m_err[2] * 0.88 + ((fx - acx) ** 2 + (fy - acy) ** 2) * 0.12
+                )
         q = self.myshots
         while q and q[0][0] <= o.tick:
             _due, mx, my, dx, dy, cx, cy = q.pop(0)
@@ -633,7 +656,9 @@ class Brain(TankProgram):
         Сильнейшая по замерам — «корпус как есть»; вторая — экстраполяция
         угловой скорости; третья — сервопривод успевает доехать до ракурса.
         """
-        hull_free = wrap(self.ehull + clamp(self.e_omega, -HULL_TURN, HULL_TURN) * min(t_fly, 0.5))
+        hull_free = wrap(
+            self.ehull + clamp(self.e_omega, -HULL_TURN, HULL_TURN) * min(t_fly, 0.5)
+        )
         fx = me.x + me.vx * t_fly
         fy = me.y + me.vy * t_fly
         ex_f = self.ex + self.evx * t_fly
@@ -706,8 +731,9 @@ class Brain(TankProgram):
         self._learn_shot(o)
         if fabs(self.t - self.et) > 0.05:
             # врага не видно: ствол по курсу, ждём
-            return o.aim_turret(me.x + cos(me.hull) * 150.0,
-                                me.y + sin(me.hull) * 150.0), False
+            return o.aim_turret(
+                me.x + cos(me.hull) * 150.0, me.y + sin(me.hull) * 150.0
+            ), False
         mx = me.x + cos(me.turret) * MUZ
         my = me.y + sin(me.turret) * MUZ
         px, py, t_fly, err_px = self._predict(o, mx, my)
@@ -749,8 +775,17 @@ class Brain(TankProgram):
         if self.nav is not None:
             if not self.nav.los(mzx, mzy, px, py) or not self.nav.free_px(mzx, mzy):
                 return cmd, False
-        self.myshots.append((o.tick + int(dd / BULLET * 60.0) + 2, mzx, mzy,
-                             cos(a), sin(a), aim[0], aim[1]))
+        self.myshots.append(
+            (
+                o.tick + int(dd / BULLET * 60.0) + 2,
+                mzx,
+                mzy,
+                cos(a),
+                sin(a),
+                aim[0],
+                aim[1],
+            )
+        )
         if len(self.myshots) > 6:
             del self.myshots[0]
         self.gear_lock_until = self.t + t_fly + 0.18
@@ -775,10 +810,14 @@ class Brain(TankProgram):
             return True, True
         hx = cos(hull_target)
         hy = sin(hull_target)
-        fwd = (nav.free_px(me.x + hx * 52.0, me.y + hy * 52.0) and
-               nav.clear_px(me.x + hx * 44.0, me.y + hy * 44.0) > 16.0)
-        rev = (nav.free_px(me.x - hx * 52.0, me.y - hy * 52.0) and
-               nav.clear_px(me.x - hx * 44.0, me.y - hy * 44.0) > 16.0)
+        fwd = (
+            nav.free_px(me.x + hx * 52.0, me.y + hy * 52.0)
+            and nav.clear_px(me.x + hx * 44.0, me.y + hy * 44.0) > 16.0
+        )
+        rev = (
+            nav.free_px(me.x - hx * 52.0, me.y - hy * 52.0)
+            and nav.clear_px(me.x - hx * 44.0, me.y - hy * 44.0) > 16.0
+        )
         return fwd, rev
 
     def _spin(self, me):
@@ -892,8 +931,10 @@ class Brain(TankProgram):
                 elif k == 1:
                     goal = own
                 else:
-                    goal = ((me.x * 0.35 + foe[0] * 0.65),
-                            (me.y * 0.35 + foe[1] * 0.65))
+                    goal = (
+                        (me.x * 0.35 + foe[0] * 0.65),
+                        (me.y * 0.35 + foe[1] * 0.65),
+                    )
                 self.hunt_goal = goal
             goal = self.hunt_goal
         hull_target, _ = self._hull_target(o, me)

@@ -30,8 +30,9 @@
 своя защита непробиваема всегда, чужая — только издалека.
 """
 
-from math import atan2, cos, sin, hypot, pi, radians, fabs
-from tankp import TankProgram, Action, clamp, wrap
+from math import atan2, cos, fabs, hypot, pi, radians, sin
+
+from tankp import Action, TankProgram, clamp, wrap
 
 TAU = pi * 2.0
 INF = float("inf")
@@ -39,22 +40,22 @@ DEG = 180.0 / pi
 COS = cos
 
 # --- константы движка (копия config.Balance) --------------------------------
-BULLET = 620.0          # скорость снаряда, px/с
-MUZZLE = 26.0           # вылет ствола от центра, px
-TURRET_RATE = 3.6       # рад/с
-HULL_RATE = 2.6         # рад/с
+BULLET = 620.0  # скорость снаряда, px/с
+MUZZLE = 26.0  # вылет ствола от центра, px
+TURRET_RATE = 3.6  # рад/с
+HULL_RATE = 2.6  # рад/с
 SPEED_F = 190.0
 SPEED_R = 120.0
 HP_MAX = 10.0
 DMG = 4.0
 RELOAD = 1.0
-SPREAD = 0.4            # ± градусов
+SPREAD = 0.4  # ± градусов
 VIEW = 760.0
 VIEW_SQ = VIEW * VIEW
-THX = 20.0              # полуразмер коробки цели (корпус/2 + радиус снаряда)
+THX = 20.0  # полуразмер коробки цели (корпус/2 + радиус снаряда)
 THY = 14.0
-FACE_HALF = 35.0        # ±35° от курса — лоб
-RICO_FRONT = 30.0       # пороги рикошета: угол к нормали грани
+FACE_HALF = 35.0  # ±35° от курса — лоб
+RICO_FRONT = 30.0  # пороги рикошета: угол к нормали грани
 RICO_SIDE = 50.0
 RICO_REAR = 60.0
 
@@ -62,16 +63,16 @@ RICO_REAR = 60.0
 DEAD_DEG = 35.0
 DEAD = radians(DEAD_DEG)
 TRACK_GAIN = 6.0
-GAS_DROP_DEG = 7.0              # на сколько градусов ошибки бросить газ
-FIRE_MARGIN = 1.5               # запас до порога рикошета, градусы
-FIRE_MARGIN_EASY = 0.5          # запас, когда враг пуст (ответить не может)
+GAS_DROP_DEG = 7.0  # на сколько градусов ошибки бросить газ
+FIRE_MARGIN = 1.5  # запас до порога рикошета, градусы
+FIRE_MARGIN_EASY = 0.5  # запас, когда враг пуст (ответить не может)
 TF_MAX = 1.2
-TUR_NEAR = 0.62                 # ствол считается наведённым на нас, рад
+TUR_NEAR = 0.62  # ствол считается наведённым на нас, рад
 
-D_BRAWL = 40.0                  # рубеж боя: дуло внутри чужого корпуса
-D_CLOSE = 46.0                  # дальше дуло снаружи — полосы пробития нет
-MIN_BAND = 2                    # сколько лучей подряд нужно, чтобы стрелять издали
-D_RETREAT_FAR = 620.0           # враг готов, а мы пусты — разрываем
+D_BRAWL = 40.0  # рубеж боя: дуло внутри чужого корпуса
+D_CLOSE = 46.0  # дальше дуло снаружи — полосы пробития нет
+MIN_BAND = 2  # сколько лучей подряд нужно, чтобы стрелять издали
+D_RETREAT_FAR = 620.0  # враг готов, а мы пусты — разрываем
 GHOST_TIME = 2.0
 HUNT_FRESH = 5.0
 STUCK_WINDOW = 0.6
@@ -223,10 +224,16 @@ class Brain(TankProgram):
         if self.seen:
             dt = t - self.et
             if 0.0005 < dt < 0.3:
-                self.e_hom = self.e_hom * 0.65 + clamp(
-                    wrap(e.hull - self.ehull) / dt, -HULL_RATE, HULL_RATE) * 0.35
-                self.e_tur_rate = self.e_tur_rate * 0.6 + clamp(
-                    wrap(e.turret - self.etur) / dt, -TURRET_RATE, TURRET_RATE) * 0.4
+                self.e_hom = (
+                    self.e_hom * 0.65
+                    + clamp(wrap(e.hull - self.ehull) / dt, -HULL_RATE, HULL_RATE)
+                    * 0.35
+                )
+                self.e_tur_rate = (
+                    self.e_tur_rate * 0.6
+                    + clamp(wrap(e.turret - self.etur) / dt, -TURRET_RATE, TURRET_RATE)
+                    * 0.4
+                )
             elif dt > 0.35:
                 self.e_hom *= 0.5
                 self.e_tur_rate *= 0.5
@@ -236,12 +243,17 @@ class Brain(TankProgram):
             self.shot_dir = e.turret
             self.shot_x = e.x + cos(e.turret) * MUZZLE
             self.shot_y = e.y + sin(e.turret) * MUZZLE
-            self.shot_due = t + hypot(self._me_x - self.shot_x,
-                                      self._me_y - self.shot_y) / BULLET
+            self.shot_due = (
+                t + hypot(self._me_x - self.shot_x, self._me_y - self.shot_y) / BULLET
+            )
             sdx = cos(e.turret)
             sdy = sin(e.turret)
-            self.shot_aimed = fabs((self._me_x - self.shot_x) * sdy
-                                   - (self._me_y - self.shot_y) * sdx) < 60.0
+            self.shot_aimed = (
+                fabs(
+                    (self._me_x - self.shot_x) * sdy - (self._me_y - self.shot_y) * sdx
+                )
+                < 60.0
+            )
         self.e_cd_prev = cd
         self.ex = e.x
         self.ey = e.y
@@ -284,8 +296,11 @@ class Brain(TankProgram):
             if not self._line_free(me.x, me.y, gx, gy):
                 wp = self._waypoint(gx, gy)
                 if wp is not None:
-                    turn = clamp(wrap(atan2(wp[1] - me.y, wp[0] - me.x)
-                                      - me.hull) * 2.2, -1.0, 1.0)
+                    turn = clamp(
+                        wrap(atan2(wp[1] - me.y, wp[0] - me.x) - me.hull) * 2.2,
+                        -1.0,
+                        1.0,
+                    )
                     drive = 1.0
         else:
             # ни следа: щупаем пространство вращением корпуса (обзор ±90° от
@@ -299,12 +314,12 @@ class Brain(TankProgram):
 
     def _arrival(self, me, ex, ey):
         """Куда смотрит линия прихода снаряда (направление полёта к нам)."""
-        back = atan2(ey - me.y, ex - me.x)       # мой азимут на врага
+        back = atan2(ey - me.y, ex - me.x)  # мой азимут на врага
         # его ствол: снаряд полетит ровно по нему
         tur = self.etur + clamp(self.e_tur_rate * 0.033, -0.12, 0.12)
         if fabs(wrap(tur + pi - back)) < TUR_NEAR:
-            return tur                            # ствол наведён на нас
-        return back + pi                          # ствол уехал: по азимуту
+            return tur  # ствол наведён на нас
+        return back + pi  # ствол уехал: по азимуту
 
     def _fight(self, o, me, ex, ey):
         dx = ex - me.x
@@ -335,7 +350,8 @@ class Brain(TankProgram):
         # корпус — под 35° к линии прихода: спереди-сбоку, где не рикошетит
         tgt = wrap(arr + pi + self.side * DEAD)
         if self.grid is not None and not self._free(
-                me.x + cos(tgt) * 58.0, me.y + sin(tgt) * 58.0):
+            me.x + cos(tgt) * 58.0, me.y + sin(tgt) * 58.0
+        ):
             alt = wrap(arr + pi - self.side * DEAD)
             if self._free(me.x + cos(alt) * 58.0, me.y + sin(alt) * 58.0):
                 tgt = alt
@@ -367,7 +383,7 @@ class Brain(TankProgram):
     def _hulls(self, e, tf):
         """Гипотезы курса чужого корпуса к моменту удара: (курс, запас)."""
         ext = wrap(e.hull + self.e_hom * tf)
-        back_e = atan2(self._me_y - e.y, self._me_x - e.x)   # его азимут на нас
+        back_e = atan2(self._me_y - e.y, self._me_x - e.x)  # его азимут на нас
         side = 1.0 if wrap(e.hull - back_e) >= 0.0 else -1.0
         law = wrap(back_e + side * DEAD)
         return ((e.hull, 0.0), (ext, 1.5), (law, 2.5))
@@ -389,8 +405,9 @@ class Brain(TankProgram):
             a = bearing - half + 2.0 * half * k / (n - 1)
             dx = cos(a)
             dy = sin(a)
-            hit = ray_obb(me.x + dx * MUZZLE, me.y + dy * MUZZLE, dx, dy,
-                          px, py, THX, THY, phull)
+            hit = ray_obb(
+                me.x + dx * MUZZLE, me.y + dy * MUZZLE, dx, dy, px, py, THX, THY, phull
+            )
             if hit is None:
                 continue
             if pen_ok(hit[1], hit[2], dx, dy, phull, margin):
@@ -475,8 +492,9 @@ class Brain(TankProgram):
         return self._aim_cmd(me, gx, gy), False
 
     def _gun_blind(self, o, me):
-        return self._aim_cmd(me, me.x + cos(me.hull) * 200.0,
-                             me.y + sin(me.hull) * 200.0), False
+        return self._aim_cmd(
+            me, me.x + cos(me.hull) * 200.0, me.y + sin(me.hull) * 200.0
+        ), False
 
     # -------------------------------------------------------------- поиск
 
@@ -512,8 +530,12 @@ class Brain(TankProgram):
             head += 1
             d = dist[y][x] + 1
             for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-                if 0 <= nx < w and 0 <= ny < h and dist[ny][nx] > d \
-                        and rows[ny][nx] not in "#o:":
+                if (
+                    0 <= nx < w
+                    and 0 <= ny < h
+                    and dist[ny][nx] > d
+                    and rows[ny][nx] not in "#o:"
+                ):
                     dist[ny][nx] = d
                     q.append((nx, ny))
         self.flow = dist
@@ -529,8 +551,11 @@ class Brain(TankProgram):
         tile = g.tile_size
         tx = int(gx // tile)
         ty = int(gy // tile)
-        if self.flow is None or self.flow_goal != (tx, ty) \
-                or self.t - self.flow_t > 0.5:
+        if (
+            self.flow is None
+            or self.flow_goal != (tx, ty)
+            or self.t - self.flow_t > 0.5
+        ):
             if self._flow(tx, ty) is None:
                 return None
         mx = int(self._me_x // tile)
@@ -540,16 +565,27 @@ class Brain(TankProgram):
             if here == 0:
                 return None
             best = None
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1),
-                           (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            for dx, dy in (
+                (1, 0),
+                (-1, 0),
+                (0, 1),
+                (0, -1),
+                (1, 1),
+                (1, -1),
+                (-1, 1),
+                (-1, -1),
+            ):
                 nx = mx + dx
                 ny = my + dy
                 if nx < 0 or ny < 0 or nx >= g.width or ny >= g.height:
                     continue
                 if g.rows[ny][nx] in "#o:":
                     continue
-                if dx and dy and (g.rows[my][mx + dx] in "#o:"
-                                  or g.rows[my + dy][mx] in "#o:"):
+                if (
+                    dx
+                    and dy
+                    and (g.rows[my][mx + dx] in "#o:" or g.rows[my + dy][mx] in "#o:")
+                ):
                     continue
                 d = self.flow[ny][nx]
                 if best is None or d < best[0]:
