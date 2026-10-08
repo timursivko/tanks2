@@ -347,7 +347,7 @@ class Brain(TankProgram):
         rr = dx * dx + dy * dy
         om = (dx * rvy - dy * rvx) / rr if rr > 1.0 else 0.0
         ff = clamp(om / HULL_RATE, -0.9, 0.9)
-        turn = clamp(err * TRACK_GAIN + ff, -1.0, 1.0)
+        turn = clamp(err * 7.5 + ff, -1.0, 1.0)
         drive = self.gear * 0.96
         p = fabs(err) / radians(GAS_DROP_DEG)
         if p > 1.0:
