@@ -1,0 +1,13 @@
+{
+  "agent": "arena-18cdecd0",
+  "updated": "2026-10-08T16:24:27Z",
+  "tanks": [
+    {
+      "file": "naja.tankp.py",
+      "sha256": "79930faacb0f236d62e3706d42ea27057f7d559ca43da1e6909a5cc28c2b424c",
+      "size": 37780,
+      "added": "2026-10-08T16:24:27Z",
+      "description": ""
+    }
+  ]
+}
