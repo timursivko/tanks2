@@ -36,7 +36,7 @@ class Brain(TankProgram):
             target_pt = o.lead(o.enemy)
             t_err = o.me.turret_error(target_pt)
             turret = max(-1.0, min(1.0, t_err * 0.5))
-            fire = abs(t_err) < 2.0 
+            fire = abs(t_err) < 2.0
 
             # 2. Ромбование 32 градуса
             h_err_base = o.me.hull_error(o.enemy)
@@ -45,13 +45,13 @@ class Brain(TankProgram):
             turn = max(-1.0, min(1.0, turn_diff * 0.2))
 
             # 3. Отступление с защитой от края карты
-            drive = -0.8 
+            drive = -0.8
             back_rad = math.radians(o.me.hull + 180)
-            
+
             # Если прямо позади нас (на расстоянии 60 px) граница карты или стена — рвем вперед!
             if o.map.blocked_between(o.me.x, o.me.y, o.me.x + math.cos(back_rad)*60, o.me.y + math.sin(back_rad)*60):
                 drive = 1.0  # Уходим от зажатия в углу
-                
+
                 # Дополнительно сбиваем прицел противнику хаотичным газом, раз уж нельзя назад
                 if math.sin(o.time * 5.0) > 0:
                     drive = 0.3
@@ -72,7 +72,7 @@ class Brain(TankProgram):
                     nx, ny = dx / dist, dy / dist
                     dt = o.time - self.last_seen_time
                     travel = min(dist, 120 * dt)
-                    
+
                     # Предполагаемая позиция врага
                     est_x = self.enemy_last_pos[0] + nx * travel
                     est_y = self.enemy_last_pos[1] + ny * travel
@@ -83,12 +83,10 @@ class Brain(TankProgram):
                     for step in range(20, 220, 20):
                         tx = est_x - nx * step
                         ty = est_y - ny * step
-                        
+
                         # Если точка внутри стены или за картой - прекращаем строить вектор
-                        if o.map.blocked_at(tx, ty):
-                            break 
                         valid_x, valid_y = tx, ty
-                    
+
                     target_x, target_y = valid_x, valid_y
 
             # --- САМОПИСНАЯ НАВИГАЦИЯ (Whiskers 2.0) ---
@@ -118,7 +116,7 @@ class Brain(TankProgram):
                     if blocked[20] and not blocked[-20]: turn = -1.0
                     elif blocked[-20] and not blocked[20]: turn = 1.0
                     else: turn = 1.0
-                
+
                 # Отталкивание от стен по бокам
                 if blocked[45] or blocked[20]: turn -= 0.7
                 if blocked[-45] or blocked[-20]: turn += 0.7
