@@ -59,10 +59,9 @@
 """
 
 from heapq import heappop, heappush
-from math import (acos, atan2, cos, degrees, fabs, hypot, pi, radians, sin,
-                  sqrt)
+from math import acos, atan2, cos, degrees, fabs, hypot, pi, radians, sin, sqrt
 
-from tankp import TankProgram, Action
+from tankp import Action, TankProgram
 
 # --- константы движка (копия config.Balance, чтобы не зависеть от неё) -------
 
@@ -91,35 +90,35 @@ HY = 14.0
 
 # --- настройки ---------------------------------------------------------------
 
-ANGLE_LOCK = radians(35.0)     # целевой ракурс: середина мёртвой зоны
-ANGLE_JIT = radians(1.6)       # медленный джиттер ракурса
-TRACK_GAIN = 5.0               # усиление доворота корпуса на азимут
-BEAR_LEAD = 1.0 / (TRACK_GAIN * HULL_TURN)   # гасит стационарный лаг
+ANGLE_LOCK = radians(35.0)  # целевой ракурс: середина мёртвой зоны
+ANGLE_JIT = radians(1.6)  # медленный джиттер ракурса
+TRACK_GAIN = 5.0  # усиление доворота корпуса на азимут
+BEAR_LEAD = 1.0 / (TRACK_GAIN * HULL_TURN)  # гасит стационарный лаг
 
-STANDOFF = 145.0               # кольцо маятника
-PRESS_RANGE = 120.0            # враг пуст — подходим
-FAR_RANGE = 520.0              # пусты мы и враг готов — отходим
-POINT_BLANK = 70.0             # в упор углы не считаем
-RAM_SAFE = 84.0                # ближе — риск обоюдного тарана
+STANDOFF = 145.0  # кольцо маятника
+PRESS_RANGE = 120.0  # враг пуст — подходим
+FAR_RANGE = 520.0  # пусты мы и враг готов — отходим
+POINT_BLANK = 70.0  # в упор углы не считаем
+RAM_SAFE = 84.0  # ближе — риск обоюдного тарана
 
-GEAR_MIN = 0.22                # полупериод джиттера газом, с
+GEAR_MIN = 0.22  # полупериод джиттера газом, с
 GEAR_MAX = 0.55
-SIDE_MIN = 2.0                 # мин. длительность стороны ракурса, с
+SIDE_MIN = 2.0  # мин. длительность стороны ракурса, с
 SIDE_MAX = 4.5
 
-ERR_READY = 40.0               # допуск ошибки модели, px: враг заряжен
-ERR_EMPTY = 70.0               # враг пуст — стреляем свободнее
-TF_READY = 0.66                # допуск времени подлёта, с
+ERR_READY = 40.0  # допуск ошибки модели, px: враг заряжен
+ERR_EMPTY = 70.0  # враг пуст — стреляем свободнее
+TF_READY = 0.66  # допуск времени подлёта, с
 TF_EMPTY = 1.0
-FINISH_HP = 4.0                # одна наша пуля от смерти врага
+FINISH_HP = 4.0  # одна наша пуля от смерти врага
 
-DODGE_MISS = 44.0              # снаряд разминётся сам — не маневрируем
+DODGE_MISS = 44.0  # снаряд разминётся сам — не маневрируем
 HUNT_FRESH = 4.0
 STUCK_WINDOW = 0.6
 STUCK_MILES = 14.0
 BATTLE_LEN = 60.0
-URGENT_T = 0.0                # позже этого ничья дороже риска
-END_SLACK = 12.0                # насколько «почти пробитие» годится в конце
+URGENT_T = 0.0  # позже этого ничья дороже риска
+END_SLACK = 12.0  # насколько «почти пробитие» годится в конце
 
 
 def wrap(a):
@@ -237,8 +236,9 @@ class Nav:
         self.h = mv.height
         self.cl = mv.clearance_grid
         #: плоская маска «сюда нельзя»: один индекс вместо двух и без срезов строк
-        self.block = bytearray(1 if ch in "#o:" else 0
-                               for row in self.rows for ch in row)
+        self.block = bytearray(
+            1 if ch in "#o:" else 0 for row in self.rows for ch in row
+        )
         self.path = None
         self.goal = None
         self.path_t = -99.0
@@ -285,8 +285,9 @@ class Nav:
                 cand.append(((tx + 0.5) * t, (ty + 0.5) * t))
         pts = []
         for c in cand:
-            if all((c[0] - p[0]) ** 2 + (c[1] - p[1]) ** 2 > 230.0 * 230.0
-                   for p in pts):
+            if all(
+                (c[0] - p[0]) ** 2 + (c[1] - p[1]) ** 2 > 230.0 * 230.0 for p in pts
+            ):
                 pts.append(c)
             if len(pts) >= 14:
                 break
@@ -315,9 +316,12 @@ class Nav:
 
     def route(self, x, y, gx, gy, t):
         """Следующая точка маршрута к цели (A* с кэшем)."""
-        if (self.path and self.goal is not None
-                and (gx - self.goal[0]) ** 2 + (gy - self.goal[1]) ** 2 < 130.0 * 130.0
-                and t - self.path_t < 0.45):
+        if (
+            self.path
+            and self.goal is not None
+            and (gx - self.goal[0]) ** 2 + (gy - self.goal[1]) ** 2 < 130.0 * 130.0
+            and t - self.path_t < 0.45
+        ):
             return self._follow(x, y)
         path = self.astar(x, y, gx, gy)
         if not path:
@@ -383,8 +387,16 @@ class Nav:
             cx = cur % w
             cy = cur // w
             gc = g[cur]
-            for ox, oy in ((1, 0), (-1, 0), (0, 1), (0, -1),
-                           (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            for ox, oy in (
+                (1, 0),
+                (-1, 0),
+                (0, 1),
+                (0, -1),
+                (1, 1),
+                (1, -1),
+                (-1, 1),
+                (-1, -1),
+            ):
                 nx = cx + ox
                 ny = cy + oy
                 if nx < 0 or ny < 0 or nx >= w or ny >= h:
@@ -396,14 +408,13 @@ class Nav:
                     continue
                 step = diag if (ox and oy) else 1.0
                 if cl[ny][nx] < 1.0:
-                    step += 0.6          # теснота штрафует
+                    step += 0.6  # теснота штрафует
                 ng = gc + step
                 old = g.get(key)
                 if old is None or ng < old - 1e-9:
                     g[key] = ng
                     came[key] = cur
-                    heappush(open_heap,
-                                   (ng + hypot(nx - gtx, ny - gty), key))
+                    heappush(open_heap, (ng + hypot(nx - gtx, ny - gty), key))
         if goal not in came and goal != start:
             return None
         cells = []
@@ -421,7 +432,6 @@ class Nav:
 
 
 class Brain(TankProgram):
-
     def on_start(self, ctx):
         seed = 0
         try:
@@ -483,7 +493,9 @@ class Brain(TankProgram):
             dt = t - self.et
             if 0.0005 < dt < 0.3:
                 om = wrap(e.hull - self.ehull) / dt
-                self.e_omega = self.e_omega * 0.70 + clamp(om, -HULL_TURN, HULL_TURN) * 0.30
+                self.e_omega = (
+                    self.e_omega * 0.70 + clamp(om, -HULL_TURN, HULL_TURN) * 0.30
+                )
                 ax = (e.vx - self.evx) / dt
                 ay = (e.vy - self.evy) / dt
                 self.e_ax = self.e_ax * 0.8 + clamp(ax, -900.0, 900.0) * 0.2
@@ -520,14 +532,16 @@ class Brain(TankProgram):
             a = atan2(vy, vx)
             da = om * tf
             r = sp / om
-            p_arc = (x + r * (sin(a + da) - sin(a)),
-                     y - r * (cos(a + da) - cos(a)))
+            p_arc = (x + r * (sin(a + da) - sin(a)), y - r * (cos(a + da) - cos(a)))
         else:
             p_arc = p_cv
-        p_ac = (x + vx * tf + 0.5 * self.e_ax * tf * tf,
-                y + vy * tf + 0.5 * self.e_ay * tf * tf)
-        self.m_hist.append((due, p_cv[0], p_cv[1], p_arc[0], p_arc[1],
-                            p_ac[0], p_ac[1]))
+        p_ac = (
+            x + vx * tf + 0.5 * self.e_ax * tf * tf,
+            y + vy * tf + 0.5 * self.e_ay * tf * tf,
+        )
+        self.m_hist.append(
+            (due, p_cv[0], p_cv[1], p_arc[0], p_arc[1], p_ac[0], p_ac[1])
+        )
 
     def _score_models(self, o, e):
         h = self.m_hist
@@ -591,11 +605,10 @@ class Brain(TankProgram):
             cmd = clamp(err / step, -1.0, 1.0)
             return cmd, (me.ammo_ready and fabs(err - cmd * step) < 0.02)
 
-        aim, lo, hi, marg_a, marg_over = self._pen_band(o, me, px, py, phull,
-                                                        d, tf)
+        aim, lo, hi, marg_a, marg_over = self._pen_band(o, me, px, py, phull, d, tf)
         slack = 0.0
         if e.hp <= FINISH_HP or o.time > URGENT_T:
-            slack = END_SLACK        # ничья — не победа: бьём и «на грани»
+            slack = END_SLACK  # ничья — не победа: бьём и «на грани»
         if aim is None:
             if marg_a is None or marg_over > slack:
                 return o.aim_turret(px, py), False
@@ -627,8 +640,10 @@ class Brain(TankProgram):
             tol = 0.004
         if not me.ammo_ready or residual > tol:
             return cmd, False
-        if self.nav is not None and (not self.nav.free(mzx, mzy)
-                                     or self.nav.los_blocked(mzx, mzy, aim[0], aim[1])):
+        if self.nav is not None and (
+            not self.nav.free(mzx, mzy)
+            or self.nav.los_blocked(mzx, mzy, aim[0], aim[1])
+        ):
             return cmd, False
 
         # темповый гейт
@@ -642,8 +657,11 @@ class Brain(TankProgram):
         if self.hp_low and not foe_empty:
             tf_ok -= 0.12
         # враг быстро крутится — корпус уйдёт из-под удара
-        if degrees(fabs(self.e_omega)) * tf > 20.0 and not foe_empty \
-                and e.hp > FINISH_HP:
+        if (
+            degrees(fabs(self.e_omega)) * tf > 20.0
+            and not foe_empty
+            and e.hp > FINISH_HP
+        ):
             return cmd, False
         # если выстрелы систематически уходят в рикошет — строже
         err_ok *= 1.0 - 0.35 * self.waste_ema
@@ -656,14 +674,14 @@ class Brain(TankProgram):
     def _pen_band(self, o, me, px, py, phull, d, tf):
         """Скан направлений через силуэт: самая широкая пробивающая полоса."""
         bearing = atan2(py - me.y, px - me.x)
-        margin = SPREAD_DEG + 1.4 + degrees(0.5 * fabs(self.e_omega)
-                                            * min(tf, 0.75))
+        margin = SPREAD_DEG + 1.4 + degrees(0.5 * fabs(self.e_omega) * min(tf, 0.75))
         phi = fabs(degrees(wrap(atan2(me.y - py, me.x - px) - phull)))
         if phi > 90.0:
             phi = 180.0 - phi
         # у границы мёртвой зоны манёвр цели легко выталкивает удар в рикошет
-        bmin = min(fabs(phi - 30.0), fabs(phi - 40.0), fabs(phi - 50.0),
-                   fabs(phi - 140.0))
+        bmin = min(
+            fabs(phi - 30.0), fabs(phi - 40.0), fabs(phi - 50.0), fabs(phi - 140.0)
+        )
         if bmin < 12.0:
             margin += 12.0
         if margin > 13.0:
@@ -671,13 +689,14 @@ class Brain(TankProgram):
         half_ang = atan2(26.0, max(d, 60.0))
         N = 11
         good = []
-        marg = None            # (превышение порога, угол) — лучший «почти»
+        marg = None  # (превышение порога, угол) — лучший «почти»
         mid = (N - 1) / 2.0
         for k in range(N):
             a = bearing - half_ang + 2.0 * half_ang * k / (N - 1)
             dx, dy = cos(a), sin(a)
-            hit = ray_obb(me.x + dx * MUZZLE, me.y + dy * MUZZLE, dx, dy,
-                          px, py, HX, HY, phull)
+            hit = ray_obb(
+                me.x + dx * MUZZLE, me.y + dy * MUZZLE, dx, dy, px, py, HX, HY, phull
+            )
             if hit is None:
                 good.append(None)
                 continue
@@ -708,11 +727,17 @@ class Brain(TankProgram):
         _, k, j = best
         a = good[(k + j) // 2]
         dx, dy = cos(a), sin(a)
-        hit = ray_obb(me.x + dx * MUZZLE, me.y + dy * MUZZLE, dx, dy,
-                      px, py, HX, HY, phull)
+        hit = ray_obb(
+            me.x + dx * MUZZLE, me.y + dy * MUZZLE, dx, dy, px, py, HX, HY, phull
+        )
         tt = hit[0] if hit is not None else d
-        return ((me.x + dx * (MUZZLE + tt), me.y + dy * (MUZZLE + tt)),
-                good[k], good[j], None, 0.0)
+        return (
+            (me.x + dx * (MUZZLE + tt), me.y + dy * (MUZZLE + tt)),
+            good[k],
+            good[j],
+            None,
+            0.0,
+        )
 
     def _log_shot(self, o, me, a, cx, cy, e):
         mx = me.x + cos(a) * MUZZLE
@@ -740,10 +765,10 @@ class Brain(TankProgram):
     def _gun_blind(self, o, me):
         if self.seen and (self.t - self.et) < HUNT_FRESH:
             age = self.t - self.et
-            return o.aim_turret(self.ex + self.evx * age * 0.6,
-                                self.ey + self.evy * age * 0.6)
-        return o.aim_turret(me.x + cos(me.hull) * 200.0,
-                            me.y + sin(me.hull) * 200.0)
+            return o.aim_turret(
+                self.ex + self.evx * age * 0.6, self.ey + self.evy * age * 0.6
+            )
+        return o.aim_turret(me.x + cos(me.hull) * 200.0, me.y + sin(me.hull) * 200.0)
 
     # ------------------------------------------------------------- угроза
 
@@ -756,8 +781,13 @@ class Brain(TankProgram):
             if jumped or blind:
                 a = e.turret
                 age = 0.0 if jumped else (RELOAD - cd)
-                self.threat = (e.x + cos(a) * MUZZLE, e.y + sin(a) * MUZZLE,
-                               cos(a), sin(a), self.t - age)
+                self.threat = (
+                    e.x + cos(a) * MUZZLE,
+                    e.y + sin(a) * MUZZLE,
+                    cos(a),
+                    sin(a),
+                    self.t - age,
+                )
             self.prev_cd = cd
         else:
             self.prev_cd = None
@@ -799,8 +829,10 @@ class Brain(TankProgram):
         else:
             side = 1.0 if (dx * me.vy - dy * me.vx) >= 0.0 else -1.0
         ex, ey = -dy * side, dx * side
-        if self.nav is not None and self.nav.clearance(me.x + ex * 46.0,
-                                                       me.y + ey * 46.0) < 20.0:
+        if (
+            self.nav is not None
+            and self.nav.clearance(me.x + ex * 46.0, me.y + ey * 46.0) < 20.0
+        ):
             ex, ey = -ex, -ey
         ux, uy = unit(ex - dx * 0.35, ey - dy * 0.35)
         self.threat_hot = True
@@ -861,9 +893,12 @@ class Brain(TankProgram):
         jit = ANGLE_JIT * sin(t * 2.3 + self.side)
         ang = ANGLE_LOCK + jit
         if d < 200.0:
-            ang += radians(2.5)      # ближний лаг отслеживания съедает ракурс
-        hull_target = (self._armor_ref(o, me, e, bearing, d)
-                       + self.bear_omega * BEAR_LEAD + self.side * ang)
+            ang += radians(2.5)  # ближний лаг отслеживания съедает ракурс
+        hull_target = (
+            self._armor_ref(o, me, e, bearing, d)
+            + self.bear_omega * BEAR_LEAD
+            + self.side * ang
+        )
         vhx, vhy = cos(hull_target), sin(hull_target)
         u2 = (vhx * self.gear, vhy * self.gear)
         u2 = self._wall_fix(o, me, u2)
@@ -924,7 +959,11 @@ class Brain(TankProgram):
             hull_target = last_bear + self.side * ANGLE_LOCK
             err = wrap(hull_target - me.hull)
             turn = clamp(err * TRACK_GAIN, -1.0, 1.0)
-            gear = 1.0 if (u[0] * cos(hull_target) + u[1] * sin(hull_target)) >= 0.0 else -1.0
+            gear = (
+                1.0
+                if (u[0] * cos(hull_target) + u[1] * sin(hull_target)) >= 0.0
+                else -1.0
+            )
             return turn, gear * 0.95
         # первые секунды: идём к чужому спавну, но корпус держим под ракурсом
         # к направлению на спавн — контакт обычно случается на этом марше
@@ -934,7 +973,11 @@ class Brain(TankProgram):
             hull_target = hb + self.side * ANGLE_LOCK
             err = wrap(hull_target - me.hull)
             turn = clamp(err * TRACK_GAIN, -1.0, 1.0)
-            gear = 1.0 if (u[0] * cos(hull_target) + u[1] * sin(hull_target)) >= 0.0 else -1.0
+            gear = (
+                1.0
+                if (u[0] * cos(hull_target) + u[1] * sin(hull_target)) >= 0.0
+                else -1.0
+            )
             return turn, gear * self._throttle(err)
         err = wrap(want - me.hull)
         return clamp(err * 2.4, -1.0, 1.0), (0.95 if fabs(err) < 2.1 else -0.45)
@@ -951,9 +994,9 @@ class Brain(TankProgram):
                 return sp.x, sp.y
             return me.x + cos(me.hull) * 200.0, me.y + sin(me.hull) * 200.0
         if self.patrol_k is None:
-            self.patrol_k = min(range(len(pts)),
-                                key=lambda i: hypot(pts[i][0] - me.x,
-                                                    pts[i][1] - me.y))
+            self.patrol_k = min(
+                range(len(pts)), key=lambda i: hypot(pts[i][0] - me.x, pts[i][1] - me.y)
+            )
         g = pts[self.patrol_k % len(pts)]
         if hypot(g[0] - me.x, g[1] - me.y) < 80.0:
             self.patrol_k += 1
@@ -980,8 +1023,11 @@ class Brain(TankProgram):
         best_c = -1.0
         for k in range(8):
             a = me.hull + k * (TAU / 8)
-            c = self.nav.clearance(me.x + cos(a) * 46.0,
-                                   me.y + sin(a) * 46.0) if self.nav else 50.0
+            c = (
+                self.nav.clearance(me.x + cos(a) * 46.0, me.y + sin(a) * 46.0)
+                if self.nav
+                else 50.0
+            )
             if c > best_c:
                 best_c = c
                 best_a = a
@@ -992,8 +1038,11 @@ class Brain(TankProgram):
         self.px, self.py = me.x, me.y
         self.stuck_t += o.dt
         if self.stuck_t >= STUCK_WINDOW:
-            if self.mile < STUCK_MILES and fabs(self.cmd_drive) > 0.3 \
-                    and self.t >= self.escape_until:
+            if (
+                self.mile < STUCK_MILES
+                and fabs(self.cmd_drive) > 0.3
+                and self.t >= self.escape_until
+            ):
                 self.escape_side = 1.0 if self._rand() > 0.5 else -1.0
                 self.escape_until = self.t + 0.6
                 self.gear = 1
@@ -1027,8 +1076,9 @@ class Brain(TankProgram):
 
         if self.t < self.escape_until:
             self.cmd_drive = -0.9
-            return Action(drive=-0.9, turn=self.escape_side * 0.9,
-                          turret=turret, fire=fire)
+            return Action(
+                drive=-0.9, turn=self.escape_side * 0.9, turret=turret, fire=fire
+            )
         if threat is not None:
             turn, drive = self._dodge(o, me, threat)
         elif e is not None:

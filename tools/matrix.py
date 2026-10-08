@@ -129,6 +129,10 @@ def main() -> int:
     draws = 0
     total = 0
     pairs = list(itertools.combinations(keys, 2))
+    # Счёт каждой пары «a против b» (порядок пары — как в keys): победы a,
+    # победы b, ничьи. Для таблицы «каждый с каждым» нужен именно он, а не
+    # суммарные победы: они не говорят, кто кого обыграл.
+    h2h = {(a, b): [0, 0, 0] for a, b in pairs}
     # Порядок «карта, сид, пара»: при --deadline успевают пройти все пары
     # хотя бы на одной карте, а не только первые программы против первых.
     matches = [(mp, seed, a, b)
@@ -143,15 +147,39 @@ def main() -> int:
         total += 1
         if world.outcome == "draw":
             draws += 1
+            h2h[(a, b)][2] += 1
         else:
             winner = a if world.outcome == "a_win" else b
             wins[winner] += 1
+            h2h[(a, b)][0 if winner == a else 1] += 1
         rows.append((a, b, mp, seed, world.outcome, round(world.tick / 60.0, 1)))
 
     print(f"пар: {total}, ничьих: {draws} ({draws / max(1, total):.0%})")
     print("победы:")
     for k in sorted(keys, key=lambda x: -wins[x]):
         print(f"  {k:<12} {wins[k]:>3}  ({wins[k] / max(1, total - draws):.0%} решающих)")
+    if total:
+        # Каждая ячейка — счёт строки против столбца: победы-ничьи-поражения.
+        pos = {k: i for i, k in enumerate(keys)}
+        grid = {}
+        for r in keys:
+            for c in keys:
+                if r == c:
+                    grid[(r, c)] = "—"
+                    continue
+                a, b = (r, c) if pos[r] < pos[c] else (c, r)
+                w, l, d = h2h[(a, b)]
+                if r != a:
+                    w, l = l, w
+                grid[(r, c)] = f"{w}-{d}-{l}"
+        width = max(len(s) for s in [*keys, *grid.values()])
+        print("матрица (строка против столбца, победы-ничьи-поражения):")
+        print(" " * (width + 1) + "".join(f"{k:>{width + 2}}" for k in keys))
+        for r in keys:
+            line = f"{r:<{width + 1}}"
+            for c in keys:
+                line += f"{grid[(r, c)]:>{width + 2}}"
+            print(line)
     if "-v" in args:
         print("подробно:")
         for r in rows:
