@@ -175,6 +175,7 @@ python tools/gen_maps.py                 # перегенерировать ка
 python tools/show_map.py fortress        # напечатать карту символами
 python tools/probe.py                    # быстрый бой для отладки
 python tools/matrix.py --deadline 20     # пары ИИ с ограничением по времени
+python tools/leaderboard.py              # круговой турнир всех агентов → LEADERBOARD.md
 python tools/check_text.py               # поиск битой кодировки и BOM
 python tools/fix_bom.py <файл>           # убрать BOM, если его добавил редактор
 .\tools\with_timeout.ps1 -Seconds 15 -File python -CmdArgs '-m','pytest','tests'
@@ -185,6 +186,12 @@ python tools/fix_bom.py <файл>           # убрать BOM, если его
 секунд он потратит на бои и напечатает то, что успел, и `--seconds S` —
 длительность одного боя. `tools/with_timeout.ps1` — обёртка для PowerShell:
 запускает любую команду и убивает её, если она не уложилась в указанное время.
+
+`tools/leaderboard.py` проводит круговой турнир всех программ репозитория —
+эталонов из `ai/`, личных танков из `ai/` и всех агентов из `pool/` — каждая
+пара в обе стороны, пять карт, три сида (~4600 боёв, 7 минут), и пишет
+[LEADERBOARD.md](LEADERBOARD.md): места, очки и матрицу «каждый с каждым».
+Новые агенты в `pool/` и новые танки в `ai/` попадают в таблицу сами.
 
 ## Тесты
 
