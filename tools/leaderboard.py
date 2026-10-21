@@ -15,11 +15,10 @@
 как в песочнице сервера, где на бой поднимается свежий процесс: внутреннее
 состояние программ (обучение, кэши) не перетекает из боя в бой.
 
-Отчёт — Markdown: условия, таблица мест (очки = победы + ½ ничьих), разбор
-сильнейших друг против друга, восстания слабых (кто и сколько раз обыгрывал
-вышестоящих и чьи скальпы самые крупные), подробная статистика (точность,
-рикошеты, тараны, HP, длина боя, время решения и вылеты за бюджет), матрица
-«каждый с каждым» и разбивка счёта по картам. Полный прогон — примерно
+Отчёт — Markdown: условия, таблица мест (очки = победы + ½ ничьих), счёт
+сильнейших друг против друга, подробная статистика (точность, рикошеты,
+тараны, HP, длина боя, время решения и вылеты за бюджет), матрица «каждый с
+каждым» и разбивка счёта по картам. Полный прогон — примерно
 8 минут, поэтому у инструмента есть
 ``--deadline``: столько секунд wall-clock он потратит на бои и запишет то,
 что успело (в отчёте останется пометка о неполном прогоне).
@@ -333,7 +332,8 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
         f"| Участников | {len(fighters)} — {participants} |",
         f"| Боёв | {done} из {planned} "
         f"({len(list(itertools.combinations(fighters, 2)))} пара × 2 стороны "
-        f"× {len(maps)} карт × {len(seeds)} сида) |",
+        f"× {len(maps)} карт × {len(seeds)} сида = "
+        f"{2 * len(maps) * len(seeds)} боёв на пару) |",
         f"| Карты | {', '.join(f'`{m}`' for m in maps)} |",
         f"| Сиды | {', '.join(str(s) for s in seeds)} |",
         f"| Лимит боя | {max_seconds} с, HP {BALANCE.hp:g}, урон "
@@ -342,15 +342,15 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
         f"| Бюджет решения | {BALANCE.default_budget_ms:g} мс |",
         f"| Прогон | {fmt_duration(elapsed)} |",
         "",
-        "Очки = победы + ½ ничьих, % = очки / бои. Ср. нанесено и получено —",
-        "средний урон за бой. Ниже: разбор сильнейших друг против друга,"
-        "восстания слабых, подробная статистика, матрица «каждый с каждым» и",
-        "счёт по картам.",
+        "Как читать таблицу: Игры, Победы, Ничьи, Поражения — счёт за турнир;",
+        "Очки = победы + ½ ничьих; % = очки / игры; Ср. нанесено и получено —",
+        "средний урон за бой. Ниже: счёт сильнейших друг против друга,",
+        "подробная статистика, матрица «каждый с каждым» и счёт по картам.",
         "",
         "## Таблица",
         "",
-        "| # | Танк | Автор | Группа | И | В | Н | П | Очки | % | "
-        "Ср. нанесено | Ср. получено |",
+        "| # | Танк | Автор | Группа | Игры | Победы | Ничьи | Поражения | "
+        "Очки | % | Ср. нанесено | Ср. получено |",
         "|--:|---|--|:--:|--:|--:|--:|--:|--:|--:|--:|--:|",
     ]
     for i, f in enumerate(ranked, 1):
@@ -360,7 +360,7 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
             f"| {r.wins} | {r.draws} | {r.losses} | {r.points:g} | "
             f"{r.pct:.1f} | {r.dealt / max(1, r.games):.1f} "
             f"| {r.taken / max(1, r.games):.1f} |")
-    # --- Топ против топа и восстания слабых --------------------------------
+    # --- Счёт сильнейших друг против друга --------------------------------
     pos = {f.key: i for i, f in enumerate(fighters)}
     top = ranked[:TOP_N]
     top_keys = {f.key for f in top}
@@ -369,8 +369,8 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
             "",
             "## Топ против топа",
             "",
-            f"Взаимный счёт {len(top)} сильнейших ({', '.join(f.name for f in top)}) — "
-            "каждый с каждым, строка против столбца: победы-ничьи-поражения.",
+            f"Взаимный счёт {len(top)} сильнейших ({', '.join(f.name for f in top)}): "
+            "в клетке — счёт строки против столбца, победы-ничьи-поражения.",
             "",
             "```text",
             render_matrix(fighters, h2h, only=top_keys),
@@ -391,45 +391,9 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
         circle.sort(key=lambda t: (-t[0], -t[1], t[2].name))
         parts = ", ".join(f"{f.name} — {pts:g}/{games}"
                           for pts, games, f in circle)
-        lines.append(f"Очки в круге сильнейших (из общего числа боёв): {parts}.")
+        lines.append("Очки в круге сильнейших — только игры друг с другом "
+                     f"(победа 1, ничья ½, из общего числа таких игр): {parts}.")
 
-    upsets = []
-    for i, f in enumerate(ranked):
-        wins_up = 0
-        wins_top = 0
-        scalp = None
-        for g in ranked[:i]:          # от сильного к слабому
-            w, d, l = h2h_cell(pos, h2h, f.key, g.key)
-            if w:
-                wins_up += w
-                if g.key in top_keys:
-                    wins_top += w
-                if scalp is None:
-                    scalp = (ranked.index(g) + 1, g, w, d, l)
-        upsets.append((f, i + 1, wins_up, wins_top, scalp))
-    if any(u[2] for u in upsets):
-        lines += [
-            "",
-            "## Когда слабые обыгрывают сильных",
-            "",
-            "Восстание — победа над танком, который выше в таблице. «Крупнейший "
-            f"скальп» — сильнейший побеждённый танк и счёт против него. "
-            f"«Над топ-{TOP_N}» — сколько таких побед взято у первых "
-            f"{TOP_N} мест.",
-            "",
-            f"| Место | Танк | Побед над выше | Над топ-{TOP_N} | Крупнейший скальп |",
-            "|--:|---|--:|--:|---|",
-        ]
-        shown = sorted((u for u in upsets if u[2]),
-                       key=lambda u: (-u[2], u[4][0], u[1]))
-        for f, place, wins_up, wins_top, scalp in shown:
-            cell = (f"**{scalp[1].name}** ({scalp[0]}-е место, "
-                    f"{scalp[2]}-{scalp[3]}-{scalp[4]})" if scalp else "—")
-            lines.append(f"| {place} | {f.name} | {wins_up} | {wins_top} | {cell} |")
-        clean = [f.name for f, _, wu, _, _ in upsets if not wu]
-        if clean:
-            lines.append("")
-            lines.append(f"Ни одной победы над вышестоящим: {', '.join(clean)}.")
     lines += [
         "",
         "## Подробная статистика",
@@ -454,6 +418,10 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
             f"| {r.hp_left / g:.1f} | {r.ticks / g / 60:.1f} с "
             f"| {r.think_max:.2f} | {avg_think:.2f} | {r.over_budget} |")
     lines += [
+        "Ср. HP в конце — сколько HP оставалось к концу боя (максимум 10).",
+        "Ср. длина боя — средняя длительность боя. Пик и ср. think — самое",
+        "долгое и среднее время одного решения. Вне бюджета — сколько решений",
+        "за весь турнир шло дольше 10 мс (бюджет на тик).",
         "",
         "## Каждый с каждым",
         "",
@@ -468,8 +436,8 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
         "",
         "## По картам",
         "",
-        "Счёт строки на карте (победы-ничьи-поражения), порядок строк — как в",
-        "таблице мест.",
+        "Колонки — карты, строки — танки (порядок как в таблице мест).",
+        "В клетке — счёт танка на этой карте: победы-ничьи-поражения.",
         "",
         "```text",
         render_map_matrix(ranked, mrec, maps),
@@ -494,6 +462,19 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
             place = ranked.index(f) + 1
             lines.append(f"- {word}: **{f.name}** ({f.author}) — "
                          f"{place}-е место, {r.pct:.1f}%.")
+    # Самые крупные скальпы — одной строкой, без отдельного раздела.
+    scalps = []
+    for i, f in enumerate(ranked):
+        for g in ranked[:i]:          # от сильного к слабому
+            w, d, l = h2h_cell(pos, h2h, f.key, g.key)
+            if w:
+                scalps.append((g, f, w, d, l))
+                break
+    if scalps:
+        scalps.sort(key=lambda t: (ranked.index(t[0]), -t[2]))
+        parts = [f"{f.name} берёт {w}-{d}-{l} у {g.name}"
+                 for g, f, w, d, l in scalps[:3]]
+        lines.append(f"- Самые крупные скальпы: {'; '.join(parts)}.")
     if any(rec[f.key].errors for f in fighters):
         bad = ", ".join(f"{f.name} ({rec[f.key].errors})"
                         for f in ranked if rec[f.key].errors)
@@ -503,7 +484,7 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
                      f"{planned} боёв — таблица неполная.")
     lines += [
         "- Обновить таблицу: `python tools/leaderboard.py` — полный прогон "
-        "~7 мин, файл перезапишется. Новые агенты в `pool/` и новые танки в "
+        "~8 мин, файл перезапишется. Новые агенты в `pool/` и новые танки в "
         "`ai/` попадают в турнир сами.",
         "",
     ]
