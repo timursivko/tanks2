@@ -1,0 +1,64 @@
+# Лидербоард пересобирается сам: турнир всех танков (ai/ + pool/) гоняется на
+# каждый push в master, где поменялись танки или движок, и вручную кнопкой
+# «Run workflow». Инструмент и движок живут на стандартной библиотеке, поэтому
+# зависимости ставить не нужно (fastapi/uvicorn нужны только серверу).
+#
+# Турнир — круговой: C(N,2) пар × 2 стороны × 5 карт × 3 сида. На 19 танках
+# это ~5100 боёв и ~8 минут, запас по времени с большим остатком. Если пул
+# вырастет и турнир перестанет укладываться, --deadline остановит прогон,
+# отчёт честно пометится неполным, а воркфлоу не упадёт.
+name: leaderboard
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "pool/**"
+      - "ai/**"
+      - "engine/**"
+      - "config.py"
+      - "tools/leaderboard.py"
+  workflow_dispatch:           # кнопка «Run workflow» на странице Actions
+
+permissions:
+  contents: write              # коммит обновлённого LEADERBOARD.md обратно в master
+
+concurrency:
+  group: leaderboard
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master          # запуск с любой ветки всё равно считает master
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Пересчитать лидербоард
+        run: python tools/leaderboard.py --deadline 1500
+
+      - name: Закоммитить обновление в master
+        run: |
+          if git diff --quiet -- LEADERBOARD.md; then
+            echo "Лидербоард не изменился — коммитить нечего"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add LEADERBOARD.md
+          git commit -m "лидербоард: автообновление (воркфлоу leaderboard)"
+          # мастер мог сдвинуться, пока шёл турнир (мержи pool-PR): пересобираем
+          # коммит сверху и пушим, до 3 попыток
+          for i in 1 2 3; do
+            git pull --rebase origin master && git push origin HEAD:master && exit 0
+            echo "попытка $i не удалась, повтор через 5 с"
+            sleep 5
+          done
+          echo "не удалось запушить после 3 попыток" >&2
+          exit 1
