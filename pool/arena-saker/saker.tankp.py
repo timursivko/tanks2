@@ -81,24 +81,16 @@ from math import atan2, cos, fabs, hypot, pi, radians, sin
 
 from tankp import Action, TankProgram, clamp, wrap
 
-TAU = pi * 2.0
 INF = float("inf")
 DEG = 180.0 / pi
-COS = cos
 
 # --- константы движка (копия config.Balance) --------------------------------
 BULLET = 620.0  # скорость снаряда, px/с
 MUZZLE = 26.0  # вылет ствола от центра, px
 TURRET_RATE = 3.6  # рад/с
 HULL_RATE = 2.6  # рад/с
-SPEED_F = 190.0
-SPEED_R = 120.0
 HP_MAX = 10.0
-DMG = 4.0
-RELOAD = 1.0
-SPREAD = 0.4  # ± градусов
 VIEW = 760.0
-VIEW_SQ = VIEW * VIEW
 THX = 20.0  # полуразмер коробки цели (корпус/2 + радиус снаряда)
 THY = 14.0
 FACE_HALF = 35.0  # ±35° от курса — лоб
@@ -106,29 +98,20 @@ RICO_FRONT = 30.0  # пороги рикошета: угол к нормали �
 RICO_SIDE = 50.0
 RICO_REAR = 60.0
 
-HMODE = 1
-GATE_K = 3
-HSTEP_MAX = 0.7
-ARR_CAP = 0.3
-
 # --- настройки боя ----------------------------------------------------------
 DEAD_DEG = 36.0
 DEAD = radians(DEAD_DEG)
-TRACK_GAIN = 6.0
-GAS_DROP_DEG = 7.0  # на сколько градусов ошибки бросить газ
 FIRE_MARGIN = 1.5  # запас до порога рикошета, градусы
-FIRE_MARGIN_EASY = 0.5  # запас, когда враг пуст (ответить не может)
-TF_MAX = 1.2
 TUR_NEAR = 0.62  # ствол считается наведённым на нас, рад
 
+GATE_NEED = 3  # сколько из 4 гипотез курса должны пробиваться
+STEP_MAX = 0.7  # потолок отрезка курса, рад (2.6 рад/с * 0.27 с)
+ARR_TF = 0.3  # насколько вперёд экстраполируем чужую башню, с
+
 D_BRAWL = 40.0  # рубеж боя: дуло внутри чужого корпуса
-D_CLOSE = 46.0  # дальше дуло снаружи — полосы пробития нет
-MIN_BAND = 2  # сколько лучей подряд нужно, чтобы стрелять издали
-D_RETREAT_FAR = 620.0  # враг готов, а мы пусты — разрываем
 SWING_AMP = 0.34
 SWING_FAR = 400.0
 SWING_RATE = TURRET_RATE
-GHOST_TIME = 2.0
 HUNT_FRESH = 5.0
 HUNT_TIME = 4.5
 STUCK_WINDOW = 0.6
@@ -243,7 +226,6 @@ class Brain(TankProgram):
         self.e_hom = 0.0
         self.e_tur_rate = 0.0
         self.ehp = HP_MAX
-        self.e_ammo = True
         self.e_cd = 0.0
         self.e_cd_prev = 0.0
         self.shot_t = -99.0
@@ -258,7 +240,6 @@ class Brain(TankProgram):
         self.swing_dir = 1.0
         self.side = 1.0
         self.gear = 1.0
-        self.gear_until = 0.0
 
         # маршрут
         self.flow = None
@@ -324,7 +305,6 @@ class Brain(TankProgram):
         self.ehull = e.hull
         self.etur = e.turret
         self.ehp = e.hp
-        self.e_ammo = e.ammo_ready
         self.e_cd = cd
         self.et = t
         self.seen = True
@@ -377,8 +357,8 @@ class Brain(TankProgram):
     def _arrival(self, me, ex, ey):
         d = hypot(ex - me.x, ey - me.y)
         tf = d / BULLET
-        if tf > ARR_CAP:
-            tf = ARR_CAP
+        if tf > ARR_TF:
+            tf = ARR_TF
         back = atan2(ey - me.y, ex - me.x)
         tur = self.etur + clamp(self.e_tur_rate * tf, -0.35, 0.35)
         if fabs(wrap(tur + pi - back)) > TUR_NEAR:
@@ -445,17 +425,23 @@ class Brain(TankProgram):
         return e.x + e.vx * t, e.y + e.vy * t, t
 
     def _hulls(self, e, tf, dx, dy):
+        """Курс цели к моменту удара — отрезок, а не точка.
+
+        Корпус поворачивается не быстрее HULL_RATE, поэтому за время полёта tf
+        цель успевает увести курс на +-HULL_RATE*tf (на 200 px это +-25°, на
+        пределе — STEP_MAX). Четвёртая гипотеза — экстраполяция по её угловой
+        скорости. Гейт требует, чтобы пробивали GATE_NEED из четырёх: одна
+        удобная гипотеза — это и есть выстрел в броню.
+        """
         step = HULL_RATE * tf
-        if step > HSTEP_MAX:
-            step = HSTEP_MAX
-        out = [(e.hull, 0.0), (wrap(e.hull + step), 1.0), (wrap(e.hull - step), 1.0)]
-        if HMODE >= 1:
-            out.append((wrap(e.hull + self.e_hom * tf), 1.0))
-        if HMODE >= 2:
-            law = atan2(dy, dx) + pi
-            out.append((wrap(law + DEAD), 0.5))
-            out.append((wrap(law - DEAD), 0.5))
-        return tuple(out)
+        if step > STEP_MAX:
+            step = STEP_MAX
+        return (
+            (e.hull, 0.0),
+            (wrap(e.hull + step), 1.0),
+            (wrap(e.hull - step), 1.0),
+            (wrap(e.hull + self.e_hom * tf), 1.0),
+        )
 
     def _gun(self, o, me, e):
         """Ствол качается поперёк азимута, огонь — только когда луч из дула
@@ -493,6 +479,7 @@ class Brain(TankProgram):
             return cmd, False
         if not self._line_free(mzx, mzy, px, py):
             return cmd, False
+        # считаем, при скольких гипотезах курса луч реально пробивает
         good = 0
         total = 0
         for phull, extra in self._hulls(e, tf, dx, dy):
@@ -502,7 +489,7 @@ class Brain(TankProgram):
                 continue
             if pen_ok(hit[1], hit[2], dx, dy, phull, FIRE_MARGIN + extra):
                 good += 1
-        if total and good >= GATE_K:
+        if total and good >= GATE_NEED:
             return cmd, True
         return cmd, False
 
