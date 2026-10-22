@@ -1,0 +1,59 @@
+# Замер скорости на самом раннере: одна и та же выборка боёв считается
+# нативным ядром и Python-движком в 1, 2, 3 и 4 процесса. Нужен, чтобы решать
+# по цифрам, а не по числу ядер: у ubuntu-latest 4 vCPU, но это обычно два
+# физических ядра с HT, и «все ядра» не всегда быстрее.
+#
+# Запуск вручную: Actions → bench → Run workflow (или gh workflow run bench).
+name: bench
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Что за машина
+        run: |
+          echo "nproc: $(nproc)"
+          echo "cgroup: $(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo 'нет')"
+          python3 - <<'PY'
+          import os
+          print("os.cpu_count:", os.cpu_count())
+          try:
+              info = open("/proc/cpuinfo").read().split("\n\n")
+              pairs = set()
+              for block in info:
+                  d = dict(l.split(":", 1) for l in block.splitlines() if ":" in l)
+                  if "core id" in d and "physical id" in d:
+                      pairs.add((d["physical id"].strip(), d["core id"].strip()))
+              print("физических ядер:", len(pairs) or "?")
+          except OSError:
+              pass
+          PY
+
+      - name: Собрать нативное ядро
+        run: python -m engine.native.build --force
+
+      - name: Нативное ядро, 1..4 процесса
+        run: |
+          for j in 1 2 3 4; do
+            echo "### native, jobs=$j"
+            python3 tools/bench.py --battles 150 --skip py py-par --jobs $j --markdown | tail -6
+          done
+
+      - name: Python-движок, 1 и 4 процесса
+        run: |
+          for j in 1 4; do
+            echo "### py, jobs=$j"
+            python3 tools/bench.py --battles 150 --skip native nat-par --jobs $j --markdown | tail -5
+          done
