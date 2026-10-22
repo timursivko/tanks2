@@ -61,7 +61,6 @@ BULLET = 620.0          # скорость снаряда
 MUZZLE = 26.0           # центр танка → конец ствола
 TURRET_RATE = 3.6       # рад/с; башня абсолютная и не завязана на корпус
 HULL_RATE = 2.6         # рад/с при развороте на месте
-RELOAD = 1.0
 DT = 1.0 / 60.0
 THX = 20.0              # полуразмер коробки попадания (полкорпуса + радиус)
 THY = 14.0
@@ -76,25 +75,27 @@ KG = 5.0                # градусы: усиление по ошибке к�
 FF = 1.6                # доля feed-forward по скорости вращения линии прихода
 HSM = 0.25              # сглаживание оценки угловой скорости корпуса цели
 P_MIN = 0.6             # с какой вероятностью пробития тратим патрон
+STRICT = True           # стрелять только наверняка (все гипотезы пробивают)
+REACT_K = 0.0           # доля чужого доворота за время полёта, уходящая в гипотезы
+NH = 5                  # сколько гипотез курса перебираем
 W0 = 2.0                # градусы: базовая неуверенность в курсе цели
 AIM_SPREAD = rad(0.45)  # разброс снаряда (±0.4°) плюс ошибка наведения
 # Перебор углов ствола: вплотную полоса пробития открывается не по центру, а
 # в 10..25° от линии визирования — там луч входит в борт или в лоб под
 # острым углом. Точный шаг дорог, поэтому сетка редкая, а последние градусы
 # добираются дважды (перебор идёт по возрастанию цены смещения).
-OFFSETS = (0.0, -5.0, 5.0, -9.0, 9.0, -13.0, 13.0, -17.0, 17.0,
-           -21.0, 21.0, -25.0, 25.0, -30.0, 30.0, -36.0, 36.0)
+# Полоса пробития вплотную — 4..8° шириной, поэтому грубая сетка в 5° её
+# проскакивает: сначала обход по 3°, потом уточнение вокруг лучшего луча.
+OFFSETS = tuple(float(x) for x in range(-36, 37, 2))
 D_HOLD = 45.0           # держим, пока оба заряжены
 D_CHARGE = 22.0         # врываемся, пока он разряжен
 D_RETREAT = 115.0       # отходим, пока перезаряжаемся
-D_GRIND = 26.0          # куда идём, если ракурс цели не даётся
-POST_D = 55.0           # до какой дистанции бьём того, кто держит ракурс к стволу
-POST_FIT = 0.55         # доля подходящих тиков, при которой считаем его ракурсным
+D_GRIND = 38          # куда идём, если ракурс цели не даётся
 GRIND_T = 1.3           # c: столько без выстрела — и идём в упор
 SLOW_D = 90.0           # до какой дистанции придерживаем ход
 JINK = 0.75             # амплитуда маятника газом
 JINK_T = (0.15, 0.45)   # полупериод маятника, c
-JINK_R = 220.0          # докуда работает маятник, px
+JINK_R = 60.0          # докуда работает маятник, px
 CLOSE_MIN = 19.0        # ближе не подпускаем: толкотня корпусами
 STUCK_D = 12.0
 STUCK_WIN = 0.9
@@ -206,10 +207,6 @@ class Brain(TankProgram):
         self.bear_rate = 0.0
         self.bear_prev = 0.0
         self.bear_t = -99.0
-        self.ps_n = 0
-        self.ps_fit = 0
-        self.ps_rel = 0.0
-        self.posturer = False
         # --- чужие выстрелы: (x, y, dx, dy, момент)
         self.shots = []
         # --- маршрут
@@ -392,10 +389,15 @@ class Brain(TankProgram):
         h0 = self.ehull + self.h_rate * t
         # Разброс гипотез: своя неуверенность в курсе плюс цена одного такта
         # (курс цели к моменту удара успевает уехать ещё на один шаг).
-        w = rad(W0 + 2.5) + fabs(self.h_rate) * t * 0.35
+        # Разброс гипотез: своя неуверенность в курсе, накопленный разворот
+        # цели и её возможная РЕАКЦИЯ на наш ствол — она может доворачивать
+        # корпус до полной скорости, пока снаряд летит. Без последнего члена
+        # «наверняка» оказывается наверняка только в своей модели: ракурсный
+        # враг успевает переставить корпус и выстрел приходит в мёртвую зону.
+        w = rad(W0 + 2.5) + fabs(self.h_rate) * t * 0.35 + HULL_RATE * t * REACT_K
         if self.et < 0.0:
             w += rad(8.0)
-        nh = 5
+        nh = NH
         best = -99.0
         good = 0
         tot = 0
@@ -424,32 +426,8 @@ class Brain(TankProgram):
         return best, good / float(tot) if tot else 0.0
 
     def _pen(self, me, u, full=False):
-        """(попадает ли луч в корпус, вероятность пробития)."""
-        m, p = self._shot(me, u, na=3) if full else self._shot(me, u)
-        return m > -90.0, p
-
-    def _style(self, o, me):
-        """Стиль врага: держит ли он ракурс к нашему стволу или к пеленгу.
-
-        Ракурс к стволу — отдельный архетип: танк считает, что снаряд летит
-        ровно по стволу, и доворачивает корпус под DEAD именно к нему. Наш
-        выстрел «в полосу» по собственной развёртке против такого бесполезен:
-        пока снаряд летит, корпус успевает переехать. Архетип ловится
-        статистикой: наш ствол смотрит на цель, а её ракурс к стволу стабилен
-        и держится в 28…46°.
-        """
-        if fabs(wrap(me.turret - atan2(self.ey - me.y, self.ex - me.x))) > rad(18.0):
-            return
-        rel = degrees(fabs(wrap(self.ehull - (me.turret + pi))))
-        if self.ps_n == 0:
-            self.ps_rel = rel
-        else:
-            self.ps_rel += (rel - self.ps_rel) * 0.1
-        self.ps_n += 1
-        if fabs(rel - self.ps_rel) < 7.0 and 28.0 <= self.ps_rel <= 46.0:
-            self.ps_fit += 1
-        if self.ps_n >= 45 and self.ps_fit >= POST_FIT * self.ps_n:
-            self.posturer = True
+        """(запас пробития в градусах, вероятность пробития)."""
+        return self._shot(me, u, na=3) if full else self._shot(me, u)
 
     def _gun(self, o, me):
         """Наведение и выстрел. Возвращает (turret_cmd, fire)."""
@@ -465,18 +443,12 @@ class Brain(TankProgram):
             return cmd, False
         # ствол после этого тика: стрелять можно только туда, куда он смотрит
         barrel = wrap(me.turret + cmd * TURRET_RATE * DT)
-        if self.posturer and d > POST_D:
-            # Он держит ракурс к стволу: на этой дистанции любой наш луч
-            # приходит в мёртвую зону уже после того, как корпус переехал.
-            # Такому ответ один — вплотную, где дуло внутри чужого корпуса.
-            return cmd, False
-        hits, p = self._pen(me, barrel, full=True)
-        LOG.append((o.tick, d, p, 0, barrel, self.ehull, 0.0, 0.0))
-        if hits and p >= P_MIN:
+        m, p = self._pen(me, barrel, full=True)
+        LOG.append((o.tick, d, p, 0, self.ehull, self.h_rate, barrel))
+        if m > -90.0 and p >= (0.85 if STRICT else P_MIN):
             dx = cos(barrel)
             dy = sin(barrel)
             if self._clear(me.x + dx * MUZZLE, me.y + dy * MUZZLE, dx, dy, d + 8.0):
-                LOG.append((o.tick, d, p, 1, barrel, self.ehull, 0.0, 0.0))
                 return cmd, True
         # пробития мало: ствол смотрит в мёртвую зону. Смещение уводит луч с
         # курса цели на борт или на корму, где порог рикошета выше.
@@ -488,25 +460,31 @@ class Brain(TankProgram):
                 if fabs(off) > span:
                     continue
                 u = wrap(u_des + rad(off))
-                ok, pp = self._pen(me, u)
-                if not ok:
+                m, pp = self._pen(me, u)
+                if m < -90.0 or pp < P_MIN:
                     continue
-                score = pp - 0.004 * fabs(off)
+                # Запас важнее дешевизны смещения: выстрел с запасом в полградуса
+                # — лотерея, ведь курс цели мы знаем с ошибкой около двух.
+                # Смещение всё же стоит денег: пока ствол едет в сторону, враг
+                # видит направление и успевает переставить корпус.
+                score = (m if m < 8.0 else 8.0) - 0.08 * fabs(off)
+                if STRICT and pp < 0.999:
+                    continue
                 if score > best_p:
                     best_p = score
                     best_u = u
-            if best_p >= P_MIN:
+                LOG.append((o.tick, d, pp, 2, self.ehull, self.h_rate, u))
+            if best_p > -99.0:
                 cmd = clamp(wrap(best_u - me.turret) * 6.0, -1.0, 1.0)
                 barrel = wrap(me.turret + cmd * TURRET_RATE * DT)
                 if fabs(wrap(best_u - barrel)) < rad(4.0):
-                    ok, pp = self._pen(me, barrel, full=True)
-                    if ok and pp >= P_MIN:
+                    m2, pp = self._pen(me, barrel, full=True)
+                    LOG.append((o.tick, d, pp, 3, self.ehull, self.h_rate, barrel))
+                    if m2 > -90.0 and pp >= P_MIN:
                         dx = cos(barrel)
                         dy = sin(barrel)
                         if self._clear(me.x + dx * MUZZLE, me.y + dy * MUZZLE,
                                        dx, dy, d + 8.0):
-                            LOG.append((o.tick, d, pp, 2, barrel, self.ehull,
-                                        degrees(wrap(best_u - u_des)), degrees(wrap(best_u - barrel))))
                             return cmd, True
         return cmd, False
 
@@ -567,8 +545,6 @@ class Brain(TankProgram):
 
     def _target(self, o, me):
         """Какую дистанцию держим: темп «выстрелил — отступил — ворвался»."""
-        if self.posturer:
-            return D_GRIND
         if not me.ammo_ready:
             return D_RETREAT          # патрона нет: любая дистанция дороже
         if self._ecool(o) > 0.30:
@@ -775,7 +751,6 @@ class Brain(TankProgram):
                     self.bear_rate = -lim
             self.bear_prev = bear
             self.bear_t = o.time
-            self._style(o, me)
             turret, fire = self._gun(o, me)
             arr, tf = self._arrival(o, me)
             turn, drive = self._steer(me, d, self._target(o, me), arr, o.time)
