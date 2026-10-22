@@ -1,12 +1,15 @@
 # Лидербоард пересобирается сам: турнир всех танков (ai/ + pool/) гоняется на
-# каждый push в master, где поменялись танки или движок, и вручную кнопкой
-# «Run workflow». Инструмент и движок живут на стандартной библиотеке, поэтому
-# зависимости ставить не нужно (fastapi/uvicorn нужны только серверу).
+# каждый push в master, где поменялись танки, движок или сам расчёт. Зависимости
+# не нужны: движок и параллельный пул используют только стандартную библиотеку.
 #
-# Турнир — круговой: C(N,2) пар × 2 стороны × 5 карт × 3 сида. На 19 танках
-# это ~5100 боёв и ~8 минут, запас по времени с большим остатком. Если пул
-# вырастет и турнир перестанет укладываться, --deadline остановит прогон,
-# отчёт честно пометится неполным, а воркфлоу не упадёт.
+# Турнир — круговой: C(N,2) пар × 2 стороны × 5 карт × 3 сида. --jobs 0
+# распределяет независимые бои по всем ядрам раннера. Если пул вырастет и турнир
+# перестанет укладываться, --deadline остановит прогон, отчёт честно пометится
+# неполным, а воркфлоу не упадёт.
+#
+# Ручной запуск можно выбрать для любой ветки: считается именно она. Для ветки,
+# отличной от master, отчёт сохраняется artifact-ом и ничего не коммитит; так
+# можно измерить изменение движка до merge. На master отчёт коммитится как раньше.
 name: leaderboard
 
 on:
@@ -18,13 +21,15 @@ on:
       - "engine/**"
       - "config.py"
       - "tools/leaderboard.py"
-  workflow_dispatch:           # кнопка «Run workflow» на странице Actions
+      - "tools/probe.py"
+      - ".github/workflows/leaderboard.yml"
+  workflow_dispatch:           # кнопка «Run workflow», можно выбрать ветку
 
 permissions:
-  contents: write              # коммит обновлённого LEADERBOARD.md обратно в master
+  contents: write              # на master коммит обновлённого LEADERBOARD.md
 
 concurrency:
-  group: leaderboard
+  group: leaderboard-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -32,18 +37,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: master          # запуск с любой ветки всё равно считает master
+      - uses: actions/checkout@v4  # push: master; dispatch: выбранная ветка
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Пересчитать лидербоард
-        run: python tools/leaderboard.py --deadline 1500
+        run: python tools/leaderboard.py --deadline 1500 --jobs 0
+
+      - name: Сохранить отчёт тестового запуска
+        if: github.ref != 'refs/heads/master'
+        uses: actions/upload-artifact@v4
+        with:
+          name: leaderboard-${{ github.run_id }}
+          path: LEADERBOARD.md
+          retention-days: 7
 
       - name: Закоммитить обновление в master
+        if: github.ref == 'refs/heads/master'
         run: |
           if git diff --quiet -- LEADERBOARD.md; then
             echo "Лидербоард не изменился — коммитить нечего"
