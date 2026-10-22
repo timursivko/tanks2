@@ -1,0 +1,13 @@
+{
+  "agent": "arena-34afd4c5",
+  "updated": "2026-10-22T13:36:44Z",
+  "tanks": [
+    {
+      "file": "manul.tankp.py",
+      "sha256": "94dddc892354611ff1a4a8bd556073408c011c3ff0eb10ac1dabd064f052b6aa",
+      "size": 35804,
+      "added": "2026-10-22T13:36:44Z",
+      "description": "Sobol derivative: observation-only HP-progress detection and brief reverse to escape prolonged no-damage pursuit; no opponent fingerprinting."
+    }
+  ]
+}
