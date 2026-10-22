@@ -8,6 +8,8 @@
     python tools/leaderboard.py                     # полный прогон → LEADERBOARD.md
     python tools/leaderboard.py --maps arena duel --seeds 1 2
     python tools/leaderboard.py --deadline 600      # прерваться через 10 минут
+    python tools/leaderboard.py --workers 4         # 4 процесса на бои
+    python tools/leaderboard.py --workers 1         # последовательный эталон
     python tools/leaderboard.py --out pool/LEADERBOARD.md
 
 Каждая пара играет в обе стороны: у спавнов разное положение на карте, и
@@ -18,10 +20,19 @@
 Отчёт — Markdown: условия, таблица мест (очки = победы + ½ ничьих), счёт
 сильнейших друг против друга, подробная статистика (точность, рикошеты,
 тараны, HP, длина боя, время решения и вылеты за бюджет), матрица «каждый с
-каждым» и разбивка счёта по картам. Полный прогон — примерно
-8 минут, поэтому у инструмента есть
+каждым» и разбивка счёта по картам. Полный прогон занимает минуты (время
+зависит от числа ядер), поэтому у инструмента есть
 ``--deadline``: столько секунд wall-clock он потратит на бои и запишет то,
 что успело (в отчёте останется пометка о неполном прогоне).
+
+Бои независимы — программы загружаются заново к каждому бою, как в
+песочнице сервера, — и по умолчанию считаются параллельно на всех доступных
+ядрах (``--workers``). Результаты собираются в главном процессе в том же
+порядке, что и при последовательном прогоне, так что исходы, очки и игровая
+статистика совпадают с ``--workers 1``. Компиляция исходников кэшируется
+внутри каждого процесса, но код каждого боя исполняется в свежем
+неймспейсе. Замеры ``think`` и длительность прогона — wall-clock и
+естественно различаются между любыми двумя запусками.
 """
 
 from __future__ import annotations
@@ -30,6 +41,8 @@ import argparse
 import ast
 import datetime as dt
 import itertools
+import multiprocessing as mp
+import os
 import sys
 import time
 from dataclasses import dataclass, replace
@@ -43,7 +56,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import tankp  # noqa: E402
 from config import BALANCE  # noqa: E402
 from engine.action import Action  # noqa: E402
-from engine.grid import load_map  # noqa: E402
+from engine.grid import Arena, load_map  # noqa: E402
 from engine.observation import build_both, map_payload  # noqa: E402
 from engine.program import load_program  # noqa: E402
 from engine.world import World  # noqa: E402
@@ -54,6 +67,113 @@ DEFAULT_MAPS = ["arena", "corridor", "colonnade", "fortress", "meadow"]
 DEFAULT_SEEDS = [1, 2, 3]
 #: Сколько сильнейших считаются «топом» — для разбора «топ против топа».
 TOP_N = 5
+
+# Воркер получает неизменяемые настройки один раз. Арена во время боя только
+# читается, а World, RNG и обе программы создаются заново для каждого задания.
+_WORKER_ARENAS: dict[str, Arena] | None = None
+_WORKER_BAL = None
+_WORKER_MAX_SECONDS: int | None = None
+
+
+def _init_match_worker(arenas: dict[str, Arena], bal, max_seconds: int) -> None:
+    global _WORKER_ARENAS, _WORKER_BAL, _WORKER_MAX_SECONDS
+    _WORKER_ARENAS = arenas
+    _WORKER_BAL = bal
+    _WORKER_MAX_SECONDS = max_seconds
+
+
+def _run_match(task, arenas=None, bal=None, max_seconds: int | None = None):
+    """Считает один бой и возвращает только нужные отчёту компактные данные.
+
+    ``task`` содержит индекс исходного списка: даже при параллельном счёте
+    результаты агрегируются в том же порядке, что и в последовательной версии.
+    Не возвращаем ``World`` по IPC: треки снарядов и вся арена для отчёта не
+    нужны, а их сериализация стоила бы заметную часть выигрыша.
+    """
+    index, path_a, path_b, map_name, seed = task
+    arenas = _WORKER_ARENAS if arenas is None else arenas
+    bal = _WORKER_BAL if bal is None else bal
+    if max_seconds is None:
+        max_seconds = _WORKER_MAX_SECONDS
+    world, stats = run_battle(load_inproc(path_a, cache=True),
+                              load_inproc(path_b, cache=True),
+                              arenas[map_name], seed, bal, max_seconds)
+    return index, (world.tick, world.outcome, stats)
+
+
+def _match_worker(task):
+    return _run_match(task)
+
+
+def default_workers() -> int:
+    """Число доступных текущему процессу ядер (учитывает CPU affinity)."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return os.cpu_count() or 1
+
+
+def iter_match_results(matches, arenas, bal, max_seconds: int, *, jobs: int = 1,
+                       deadline_at: float | None = None,
+                       start_method: str | None = None):
+    """Итератор ``(match_index, (tick, outcome, stats))`` в порядке ``matches``.
+
+    Бои независимы: у каждого свой ``World`` и ``random.Random(seed)``. Поэтому
+    их можно разложить по процессам, не меняя ни одной операции внутри боя.
+    ``Pool.imap`` сохраняет порядок заданий, а суммы в отчёте поэтому складываются
+    в той же последовательности (включая порядок сложения float), что и раньше.
+
+    При deadline учитывается только непрерывный префикс исходного списка. Более
+    поздние бои могли уже считаться в других процессах, но в отчёт не попадают;
+    незавершённые воркеры останавливаются в ``finally``.
+    """
+    tasks = []
+    for index, (a, b, map_name, seed, home) in enumerate(matches):
+        x, y = (a, b) if home == 0 else (b, a)
+        tasks.append((index, str(x.path), str(y.path), map_name, seed))
+
+    if not tasks:
+        return
+    if jobs == 0:
+        jobs = default_workers()
+    worker_count = min(max(1, jobs), len(tasks))
+    if worker_count == 1:
+        for task in tasks:
+            if deadline_at is not None and time.perf_counter() >= deadline_at:
+                break
+            yield _run_match(task, arenas, bal, max_seconds)
+        return
+    if deadline_at is not None and time.perf_counter() >= deadline_at:
+        return
+
+    # Контекст по умолчанию: fork на Unix, spawn на Windows/macOS. В обоих
+    # случаях initializer получает арены и баланс явно, поэтому результат не
+    # зависит от способа создания процессов.
+    pool = mp.get_context(start_method).Pool(
+        processes=worker_count,
+        initializer=_init_match_worker,
+        initargs=(arenas, bal, max_seconds),
+    )
+    completed = False
+    try:
+        results = pool.imap(_match_worker, tasks, chunksize=1)
+        for task in tasks:
+            if deadline_at is not None and time.perf_counter() >= deadline_at:
+                break
+            # imap — именно ordered iterator: здесь всегда task[0], даже если
+            # последующие короткие бои завершились раньше текущего длинного.
+            result = next(results)
+            if result[0] != task[0]:  # защита контракта агрегации
+                raise RuntimeError("пул нарушил порядок результатов лидербоарда")
+            yield result
+        else:
+            completed = True
+    finally:
+        if completed:
+            pool.close()
+        else:
+            pool.terminate()
+        pool.join()
 
 #: Группы в таблице: откуда танк.
 GROUP_DEFAULT = "Эталон"   # ai/0N_*.tankp.py — штатные противники
@@ -482,9 +602,9 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
         lines.append(f"- ⚠️ Прогон прерван по `--deadline`: учтено {done} из "
                      f"{planned} боёв — таблица неполная.")
     lines += [
-        "- Обновить таблицу: `python tools/leaderboard.py` — полный прогон "
-        "~8 мин, файл перезапишется. Новые агенты в `pool/` и новые танки в "
-        "`ai/` попадают в турнир сами.",
+        "- Обновить таблицу: `python tools/leaderboard.py` — бои считаются "
+        "параллельно на доступных ядрах, файл перезапишется. Новые агенты в "
+        "`pool/` и новые танки в `ai/` попадают в турнир сами.",
         "",
     ]
     return "\n".join(lines)
@@ -504,7 +624,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="куда писать отчёт (по умолчанию %(default)s)")
     ap.add_argument("--deadline", type=float, default=None,
                     help="столько секунд wall-clock потратить на бои")
+    ap.add_argument("--workers", type=int, default=0, metavar="N",
+                    help="процессов для независимых боёв; 0 — все доступные ядра, "
+                         "1 — последовательный эталон (по умолчанию 0)")
     args = ap.parse_args(argv)
+    if args.workers < 0:
+        ap.error("--workers должен быть не меньше 0")
 
     fighters, copies = discover()
     if len(fighters) < 2:
@@ -516,7 +641,9 @@ def main(argv: list[str] | None = None) -> int:
     arenas = {m: load_map(m) for m in args.maps}
     pairs = list(itertools.combinations(fighters, 2))
     # Пары идут вперемешку со сменой сторон: при --deadline успевают пройти
-    # все пары на равных условиях, а не только первые.
+    # все пары на равных условиях, а не только первые. Бои независимы —
+    # программы загружаются заново в каждый бой, как в песочнице сервера —
+    # поэтому их можно разнести по рабочим процессам без изменения результата.
     matches = [(a, b, m, s, home)
                for a, b in pairs for m in args.maps for s in args.seeds
                for home in (0, 1)]
@@ -525,15 +652,15 @@ def main(argv: list[str] | None = None) -> int:
     rec: dict[str, Record] = {f.key: Record() for f in fighters}
     h2h: dict[tuple[str, str], list[int]] = {}
     mrec: dict[tuple[str, str], list[int]] = {}
+    jobs = min(default_workers() if args.workers == 0 else args.workers, total)
     t0 = time.perf_counter()
+    deadline_at = None if args.deadline is None else t0 + args.deadline
     done = 0
-    for a, b, m, s, home in matches:
-        if args.deadline is not None and time.perf_counter() - t0 >= args.deadline:
-            break
+    results = iter_match_results(matches, arenas, bal, max_seconds, jobs=jobs,
+                                 deadline_at=deadline_at)
+    for match_index, (ticks, outcome, stats) in results:
+        a, b, m, s, home = matches[match_index]
         x, y = (a, b) if home == 0 else (b, a)
-        world, stats = run_battle(load_inproc(str(x.path)),
-                                  load_inproc(str(y.path)),
-                                  arenas[m], s, bal, max_seconds)
         done += 1
         rx, ry = rec[x.key], rec[y.key]
         rx.games += 1
@@ -549,7 +676,7 @@ def main(argv: list[str] | None = None) -> int:
             r.ric_taken += st["ric_taken"]
             r.rams += st["rams"]
             r.hp_left += st["hp_left"]
-            r.ticks += world.tick
+            r.ticks += ticks
             r.think_total += st["think_total"]
             r.think_calls += st["think_calls"]
             r.think_max = max(r.think_max, st["think_max"])
@@ -559,7 +686,7 @@ def main(argv: list[str] | None = None) -> int:
         mc = mrec.setdefault((m, x.key), [0, 0, 0])
         my = mrec.setdefault((m, y.key), [0, 0, 0])
         cell = h2h.setdefault((a.key, b.key), [0, 0, 0])
-        if world.outcome == "draw":
+        if outcome == "draw":
             rx.draws += 1
             ry.draws += 1
             cell[1] += 1
@@ -568,7 +695,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # cell считает победы a (первого в комбинации), x и y — текущие
             # стороны боя: при home == 1 они поменялись местами.
-            a_won = world.outcome == ("a_win" if home == 0 else "b_win")
+            a_won = outcome == ("a_win" if home == 0 else "b_win")
             cell[0 if a_won else 2] += 1
             if (home == 0) == a_won:
                 rx.wins += 1
