@@ -178,6 +178,7 @@ python tools/matrix.py --deadline 20     # пары ИИ с ограничени
 python tools/leaderboard.py              # круговой турнир всех агентов → LEADERBOARD.md
 python tools/leaderboard.py --jobs 4     # то же, но в несколько процессов
 python tools/parity.py --long            # нативное ядро == Python-движок, потиково
+python tools/bench.py --markdown         # скорость: те же бои в разных режимах
 python tools/check_text.py               # поиск битой кодировки и BOM
 python tools/fix_bom.py <файл>           # убрать BOM, если его добавил редактор
 .\tools\with_timeout.ps1 -Seconds 15 -File python -CmdArgs '-m','pytest','tests'
@@ -244,6 +245,15 @@ python tools/fix_bom.py <файл>           # убрать BOM, если его
 ```bash
 python tools/parity.py --long                        # ~80 000 тиков + бои
 python tools/parity.py --reports a.md b.md           # два отчёта турнира
+```
+
+Замерить всё это на своей машине можно одной командой — `tools/bench.py`
+берёт одну и ту же выборку боёв и считает её всеми режимами, попутно сверяя
+счёт:
+
+```bash
+python tools/bench.py --markdown        # 60 боёв, 4 режима, таблица
+python tools/bench.py --battles 240     # выборка побольше
 ```
 
 `engine.native.self_check()` дополнительно прогоняется на старте: если
