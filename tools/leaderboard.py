@@ -266,7 +266,8 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
                  maps: list[str], seeds: list[int], max_seconds: int,
                  done: int, planned: int, elapsed: float,
                  copies: list[tuple[Fighter, list[str]]],
-                 mrec: dict[tuple[str, str], list[int]]) -> str:
+                 mrec: dict[tuple[str, str], list[int]],
+                 jobs: int = 1) -> str:
     ranked = sorted(fighters,
                     key=lambda f: (-rec[f.key].points, -rec[f.key].pct, f.name))
     counts = {g: sum(1 for f in fighters if f.group == g)
@@ -303,6 +304,7 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
         f"{BALANCE.tick_rate} Гц |",
         f"| Бюджет решения | {BALANCE.default_budget_ms:g} мс |",
         f"| Прогон | {fmt_duration(elapsed)} |",
+        *( [f"| Процессов | {jobs} |"] if jobs > 1 else [] ),
         "",
         "Как читать таблицу: Игры, Победы, Ничьи, Поражения — счёт за турнир;",
         "Очки = победы + ½ ничьих; % = очки / игры; Ср. нанесено и получено —",
@@ -443,6 +445,13 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
     if done < planned:
         lines.append(f"- ⚠️ Прогон прерван по `--deadline`: учтено {done} из "
                      f"{planned} боёв — таблица неполная.")
+    if jobs > 1:
+        lines.append(
+            f"- Время решения (`Пик think`, `Ср. think`, `Вне бюджета`) мерилось "
+            f"при {jobs} параллельных процессах: под нагрузкой оно завышено, а "
+            f"`Вне бюджета` — это в основном конкуренция за ядра, а не медленные "
+            f"программы. Для чистых замеров запускайте `--jobs 1`; на счёт эти "
+            f"колонки не влияют.")
     lines += [
         "- Обновить таблицу: `python tools/leaderboard.py` — бои идут "
         "параллельно (нативное ядро подхватывается само), файл перезапишется. "
@@ -706,7 +715,7 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(fighters, rec, h2h, maps=args.maps,
                           seeds=args.seeds, max_seconds=max_seconds,
                           done=done, planned=total, elapsed=elapsed,
-                          copies=copies, mrec=mrec)
+                          copies=copies, mrec=mrec, jobs=jobs)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report, encoding="utf-8")
