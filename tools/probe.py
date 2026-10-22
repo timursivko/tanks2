@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 import types
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,8 +26,23 @@ from engine.world import World  # noqa: E402
 import tankp  # noqa: E402
 
 
-def load_inproc(key: str):
-    """Загружает программу прямо в этом процессе (без песочницы)."""
+@lru_cache(maxsize=128)
+def _compile_cached(source: str, filename: str):
+    """Код программы, не связанный с глобальным состоянием какого-либо боя.
+
+    Исходник — часть ключа: изменение файла не может вернуть старый код. Сам
+    code object безопасно переиспользовать, потому что ``exec`` ниже каждый раз
+    получает новый ``__dict__``: кэшируется компиляция, а не экземпляр программы.
+    """
+    return compile(source, filename, "exec")
+
+
+def load_inproc(key: str, *, cache: bool = False):
+    """Загружает программу прямо в этом процессе (без песочницы).
+
+    При ``cache=True`` между боями сохраняется только результат ``compile``.
+    Модуль, ``program`` и вызов ``on_start`` по-прежнему создаются заново.
+    """
     stem = key[:-6] if key.endswith(".tankp") else key
     for cand in (ROOT / "ai" / f"{stem}.tankp.py", ROOT / "ai" / stem,
                  ROOT / "examples" / f"{stem}.tankp.py", Path(key)):
@@ -36,7 +52,9 @@ def load_inproc(key: str):
         raise SystemExit(f"нет программы {key}")
     mod = types.ModuleType("probe_program")
     mod.__file__ = str(cand)
-    exec(compile(cand.read_text(encoding="utf-8"), str(cand), "exec"), mod.__dict__)  # noqa: S102
+    source = cand.read_text(encoding="utf-8")
+    code = _compile_cached(source, str(cand)) if cache else compile(source, str(cand), "exec")
+    exec(code, mod.__dict__)  # noqa: S102
     prog = mod.__dict__.get("program")
     if prog is not None and hasattr(prog, "on_start"):
         prog.on_start({"tank": 0})
