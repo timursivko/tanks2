@@ -15,7 +15,7 @@ on:
       - ".github/bench-trigger"
 
 permissions:
-  contents: read
+  contents: write            # результаты замера коммитятся обратно в ветку
 
 jobs:
   bench:
@@ -49,16 +49,34 @@ jobs:
       - name: Собрать нативное ядро
         run: python -m engine.native.build --force
 
-      - name: Нативное ядро, 1..4 процесса
+      - name: Замер
         run: |
+          out=/tmp/bench.md
+          {
+            echo "## Замер на раннере"
+            echo
+            echo "\`nproc\`: $(nproc), \`cpu.max\`: $(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo 'нет')"
+            echo
+          } > "$out"
           for j in 1 2 3 4; do
-            echo "### native, jobs=$j"
-            python3 tools/bench.py --battles 150 --skip py py-par --jobs $j --markdown | tail -6
+            echo "### нативное ядро, $j процесс(ов)" >> "$out"
+            echo >> "$out"
+            python3 tools/bench.py --battles 150 --skip py py-par --jobs "$j" --markdown | tail -5 >> "$out"
+            echo >> "$out"
           done
-
-      - name: Python-движок, 1 и 4 процесса
-        run: |
           for j in 1 4; do
-            echo "### py, jobs=$j"
-            python3 tools/bench.py --battles 150 --skip native nat-par --jobs $j --markdown | tail -5
+            echo "### Python-движок, $j процесс(ов)" >> "$out"
+            echo >> "$out"
+            python3 tools/bench.py --battles 150 --skip native nat-par --jobs "$j" --markdown | tail -4 >> "$out"
+            echo >> "$out"
           done
+          cat "$out"
+
+      - name: Опубликовать результат
+        run: |
+          cp /tmp/bench.md BENCH.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add BENCH.md
+          git commit -m "bench: замер на раннере (автоматически)" || exit 0
+          git push origin HEAD:${{ github.ref_name }}
