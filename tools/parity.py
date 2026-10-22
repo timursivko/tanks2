@@ -146,6 +146,16 @@ def normalize_report(path: str | Path) -> list[str]:
         if line.startswith("| Прогон |"):
             out.append("| Прогон | (время не сравнивается) |")
             continue
+        if line.startswith("| Скорость |"):
+            # скорость боя — тоже измерение, и в старых отчётах её нет
+            continue
+
+        if line.startswith("| Процессов |"):
+            # сколько было процессов — свойство прогона, а не турнира
+            continue
+        if line.startswith("- Время решения ("):
+            # пояснение к тайминговым колонкам, появляется только при --jobs > 1
+            continue
         if TIMING_HEADER in line:
             in_stats = True
         elif in_stats and not line.startswith("|"):
