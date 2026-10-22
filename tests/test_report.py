@@ -43,6 +43,19 @@ def _report(tmp_path: Path, jobs: int) -> Path:
     return out
 
 
+def test_speed_is_per_battle(tmp_path: Path) -> None:
+    """Скорость печатается на бой: только она сравнима между машинами."""
+    text = _report(tmp_path, jobs=1).read_text(encoding="utf-8")
+    assert "| Скорость | 2083 мс на бой" in text
+    assert "сравнимо между машинами" in text
+
+
+def test_parity_ignores_speed(tmp_path: Path) -> None:
+    """Строка скорости (и пояснение про «Прогон») в сверке не участвуют."""
+    norm = normalize_report(_report(tmp_path, jobs=1))
+    assert not [x for x in norm if x.startswith("| Скорость |")]
+
+
 def test_parallel_run_is_marked(tmp_path: Path) -> None:
     text = _report(tmp_path, jobs=4).read_text(encoding="utf-8")
     assert "| Процессов | 4 |" in text

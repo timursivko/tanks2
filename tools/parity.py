@@ -146,6 +146,10 @@ def normalize_report(path: str | Path) -> list[str]:
         if line.startswith("| Прогон |"):
             out.append("| Прогон | (время не сравнивается) |")
             continue
+        if line.startswith("| Скорость |"):
+            # скорость боя — тоже измерение, и в старых отчётах её нет
+            continue
+
         if line.startswith("| Процессов |"):
             # сколько было процессов — свойство прогона, а не турнира
             continue

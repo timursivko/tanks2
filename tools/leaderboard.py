@@ -304,6 +304,8 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
         f"{BALANCE.tick_rate} Гц |",
         f"| Бюджет решения | {BALANCE.default_budget_ms:g} мс |",
         f"| Прогон | {fmt_duration(elapsed)} |",
+        f"| Скорость | {elapsed * 1000.0 / max(1, done):.0f} мс на бой "
+        f"(сравнимо между машинами; «Прогон» — время этой машины) |",
         *( [f"| Процессов | {jobs} |"] if jobs > 1 else [] ),
         "",
         "Как читать таблицу: Игры, Победы, Ничьи, Поражения — счёт за турнир;",
