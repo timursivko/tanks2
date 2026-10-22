@@ -8,11 +8,11 @@ name: bench
 
 on:
   workflow_dispatch:
-  # Замер по кнопке виден только когда файл уже в master, поэтому на ветках
-  # он запускается пуш-триггером: правишь .github/bench-trigger — и поехали.
+  # Кнопка видна только когда файл уже в master, поэтому на ветках замер
+  # запускается правкой самого воркфлоу: поправил — он и прогнался.
   push:
     paths:
-      - ".github/bench-trigger"
+      - ".github/workflows/bench-ci.yml"
 
 permissions:
   contents: read
