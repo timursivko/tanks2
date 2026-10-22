@@ -3,3 +3,11 @@ __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
+
+# нативное ядро боя: собирается из sim.c на месте
+engine/native/*.so
+engine/native/*.dylib
+engine/native/*.tmp
+
+# реплеи и прочие сохранения сервера
+saves/

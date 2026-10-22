@@ -9,6 +9,8 @@
     python tools/leaderboard.py --maps arena duel --seeds 1 2
     python tools/leaderboard.py --deadline 600      # прерваться через 10 минут
     python tools/leaderboard.py --out pool/LEADERBOARD.md
+    python tools/leaderboard.py --jobs 4            # в четыре процесса
+    python tools/leaderboard.py --jobs 1 --engine py  # эталонный медленный путь
 
 Каждая пара играет в обе стороны: у спавнов разное положение на карте, и
 сторона — часть условий боя. Программа загружается заново к каждому бою —
@@ -18,11 +20,23 @@
 Отчёт — Markdown: условия, таблица мест (очки = победы + ½ ничьих), счёт
 сильнейших друг против друга, подробная статистика (точность, рикошеты,
 тараны, HP, длина боя, время решения и вылеты за бюджет), матрица «каждый с
-каждым» и разбивка счёта по картам. Полный прогон — примерно
-8 минут, поэтому у инструмента есть
-``--deadline``: столько секунд wall-clock он потратит на бои и запишет то,
-что успело (в отчёте останется пометка о неполном прогоне).
+каждым» и разбивка счёта по картам. Полный прогон — примерно 8 минут, поэтому
+у инструмента есть ``--deadline``: столько секунд wall-clock он потратит на
+бои и запишет то, что успело (в отчёте останется пометка о неполном прогоне).
+
+Два ускорителя, которые не меняют результат:
+
+* ``--engine`` — нативное C-ядро (``engine/native``). Оно считает физику,
+  видимость, снаряды и округление наблюдения теми же числами и в том же
+  порядке, что Python-движок; ``auto`` (по умолчанию) включает его только
+  после побитовой самопроверки, иначе честно остаётся на Python.
+* ``--jobs`` — сколько процессов считают бои одновременно. Итоги
+  складываются строго в порядке пар, поэтому таблица мест, счёт, матрицы и
+  вся статистика боя не зависят от числа процессов. Единственное, что
+  зависит, — измеренное время решения (``Пик/Ср. think``, ``Вне бюджета``):
+  под нагрузкой процессоров оно выше, чем в одиночном прогоне.
 """
+
 
 from __future__ import annotations
 
@@ -40,14 +54,11 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "engine" / "sdk"))
 sys.path.insert(0, str(ROOT / "tools"))
 
-import tankp  # noqa: E402
+from battle.kernel import (load_program as load_battle_program,  # noqa: E402
+                           native_reason, resolve_engine, run_battle)
 from config import BALANCE  # noqa: E402
-from engine.action import Action  # noqa: E402
 from engine.grid import load_map  # noqa: E402
-from engine.observation import build_both, map_payload  # noqa: E402
 from engine.program import load_program  # noqa: E402
-from engine.world import World  # noqa: E402
-from probe import load_inproc  # noqa: E402
 
 #: Карты по умолчанию — тот же набор, что у tools/matrix.py.
 DEFAULT_MAPS = ["arena", "corridor", "colonnade", "fortress", "meadow"]
@@ -185,55 +196,6 @@ def discover() -> tuple[list[Fighter], list[tuple[Fighter, list[str]]]]:
         if counts[f.label] > 1:
             f.label = f"{f.label}({f.group})"
     return out, copies
-
-
-def run_battle(fa, fb, arena, seed: int, bal, max_seconds: int):
-    """Один бой в этом процессе. Программы — свежезагруженные точки входа.
-
-    Если программа падает на тике, тик засчитывается пустым — так же, как в
-    песочнице сервера. Время решения каждого танка считается здесь же: в
-    песочнице его меряет runner, в прогоне в процессе — таймер вокруг вызова.
-    Возвращает ``(world, stats)``: stats[0] — танк A боя, stats[1] — танк B.
-    """
-    world = World.create(arena, bal, seed=seed, max_seconds=max_seconds)
-    mv = tankp.MapView(map_payload(world))
-    fns = (fa, fb)
-    budget = bal.default_budget_ms
-    obs_cls, sdk_action = tankp.Observation, tankp.Action
-    build, clamp, step = build_both, Action.clamp, world.step
-    errors = [0, 0]
-    think_total = [0.0, 0.0]
-    think_max = [0.0, 0.0]
-    think_calls = [0, 0]
-    over = [0, 0]
-    while not world.over:
-        obs_a, obs_b = build(world, budget)
-        acts = [None, None]
-        for i, obs in enumerate((obs_a, obs_b)):
-            t0 = time.perf_counter()
-            try:
-                raw = fns[i](obs_cls(obs, mv))
-                acts[i] = raw if raw.__class__ is sdk_action else clamp(raw)
-            except Exception:  # noqa: BLE001 — тик считается пустым
-                errors[i] += 1
-                acts[i] = clamp(None)
-            ms = (time.perf_counter() - t0) * 1000.0
-            think_total[i] += ms
-            think_calls[i] += 1
-            if ms > think_max[i]:
-                think_max[i] = ms
-            if ms > budget:
-                over[i] += 1
-        step(acts)
-    stats = [{
-        "shots": t.shots, "hits": t.hits,
-        "ric": t.ricochets, "ric_taken": t.ricochets_taken,
-        "rams": t.rams, "dealt": t.damage_dealt, "taken": t.damage_taken,
-        "hp_left": t.hp, "think_total": think_total[i],
-        "think_calls": think_calls[i], "think_max": think_max[i],
-        "over_budget": over[i], "errors": errors[i],
-    } for i, t in enumerate(world.tanks)]
-    return world, stats
 
 
 def h2h_cell(pos: dict[str, int], h2h: dict[tuple[str, str], list[int]],
@@ -482,12 +444,145 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
         lines.append(f"- ⚠️ Прогон прерван по `--deadline`: учтено {done} из "
                      f"{planned} боёв — таблица неполная.")
     lines += [
-        "- Обновить таблицу: `python tools/leaderboard.py` — полный прогон "
-        "~8 мин, файл перезапишется. Новые агенты в `pool/` и новые танки в "
-        "`ai/` попадают в турнир сами.",
+        "- Обновить таблицу: `python tools/leaderboard.py` — бои идут "
+        "параллельно (нативное ядро подхватывается само), файл перезапишется. "
+        "Новые агенты в `pool/` и новые танки в `ai/` попадают в турнир сами.",
         "",
     ]
     return "\n".join(lines)
+
+
+def _fold(rec: dict[str, "Record"], h2h: dict, mrec: dict,
+          a: "Fighter", b: "Fighter", x: "Fighter", y: "Fighter",
+          home: int, map_name: str, tick: int, outcome: str,
+          stats: list[dict]) -> None:
+    """Складывает итог одного боя в таблицы турнира.
+
+    Вызывается строго в порядке ``matches`` (и в последовательном, и в
+    параллельном прогоне), поэтому суммы накапливаются одинаково: отчёт не
+    зависит от того, сколько процессов считало бои и в каком порядке они
+    реально завершились.
+    """
+    rx, ry = rec[x.key], rec[y.key]
+    rx.games += 1
+    ry.games += 1
+    for idx, f in enumerate((x, y)):
+        r, st = rec[f.key], stats[idx]
+        r.dealt += st["dealt"]
+        r.taken += st["taken"]
+        r.errors += st["errors"]
+        r.shots += st["shots"]
+        r.hits += st["hits"]
+        r.ric += st["ric"]
+        r.ric_taken += st["ric_taken"]
+        r.rams += st["rams"]
+        r.hp_left += st["hp_left"]
+        r.ticks += tick
+        r.think_total += st["think_total"]
+        r.think_calls += st["think_calls"]
+        r.think_max = max(r.think_max, st["think_max"])
+        r.over_budget += st["over_budget"]
+    # Счёт по картам ведут оба бойца боя: mc — для текущей стороны x,
+    # my — для стороны y. Иначе в отчёт попадёт ровно половина боёв.
+    mc = mrec.setdefault((map_name, x.key), [0, 0, 0])
+    my = mrec.setdefault((map_name, y.key), [0, 0, 0])
+    cell = h2h.setdefault((a.key, b.key), [0, 0, 0])
+    if outcome == "draw":
+        rx.draws += 1
+        ry.draws += 1
+        cell[1] += 1
+        mc[1] += 1
+        my[1] += 1
+    else:
+        # cell считает победы a (первого в комбинации), x и y — текущие
+        # стороны боя: при home == 1 они поменялись местами.
+        a_won = outcome == ("a_win" if home == 0 else "b_win")
+        cell[0 if a_won else 2] += 1
+        if (home == 0) == a_won:
+            rx.wins += 1
+            ry.losses += 1
+            mc[0] += 1
+            my[2] += 1
+        else:
+            rx.losses += 1
+            ry.wins += 1
+            mc[2] += 1
+            my[0] += 1
+
+
+#: Арены в процессе-исполнителе: карт в турнире единицы, грузить их на каждый
+#: бой незачем.
+_MAP_CACHE: dict[str, object] = {}
+
+
+def _run_match(task: tuple) -> tuple:
+    """Один бой по описанию задачи — точка входа для процессов-исполнителей.
+
+    Задача целиком описывает бой (стороны уже развёрнуты по ``home``),
+    поэтому результат зависит только от неё: порядок выполнения на отчёт
+    не влияет.
+    """
+    idx, x_path, y_path, map_name, seed, max_seconds, engine, bal = task
+    arena = _MAP_CACHE.get(map_name)
+    if arena is None:
+        arena = load_map(map_name)
+        _MAP_CACHE[map_name] = arena
+    world, stats = run_battle(load_battle_program(x_path),
+                              load_battle_program(y_path),
+                              arena, seed, bal, max_seconds, engine=engine)
+    return idx, world.tick, world.outcome, stats
+
+
+def _workers_default() -> int:
+    """Сколько процессов запускать по умолчанию.
+
+    Берём число ядер, но уважаем лимит cgroup: в контейнере и на раннере
+    GitHub ``os.cpu_count()`` показывает ядра хоста, а квота может быть
+    меньше. Лишние процессы не ускоряют счёт (GIL у каждой программы свой,
+    но ядра общие), зато раздувают измеренное время решения.
+    """
+    import os
+    n = max(1, os.cpu_count() or 1)
+    for path, scale in (("/sys/fs/cgroup/cpu.max", None),
+                        ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", 100000)):
+        try:
+            parts = Path(path).read_text().split()
+        except OSError:
+            continue
+        try:
+            if scale is None:                  # cgroup v2: "quota period"
+                quota, period = parts[0], int(parts[1])
+                if quota == "max":
+                    break
+                quota = int(quota)
+            else:                              # cgroup v1: только квота
+                quota = int(parts[0])
+                period = scale
+                if quota < 0:
+                    break
+        except (IndexError, ValueError):
+            continue
+        n = min(n, max(1, quota // period))
+        break
+    return n
+
+
+def _mp_context():
+    """``fork`` там, где он есть: он дешевле и наследует кэш скомпилированных
+    программ от родителя. На Windows/macOS — ``spawn``.
+
+    Переменная ``TANKSIM_MP`` позволяет выбрать способ явно — это нужно,
+    чтобы проверять переносимый путь (``spawn``) и на Linux.
+    """
+    import multiprocessing as mp
+    import os
+    method = os.environ.get("TANKSIM_MP", "").strip().lower()
+    if method:
+        return mp.get_context(method)
+    try:
+        return mp.get_context("fork")
+    except ValueError:
+        return mp.get_context("spawn")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -504,6 +599,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="куда писать отчёт (по умолчанию %(default)s)")
     ap.add_argument("--deadline", type=float, default=None,
                     help="столько секунд wall-clock потратить на бои")
+    ap.add_argument("--jobs", type=int, default=0,
+                    help="сколько процессов считать бои одновременно "
+                         "(0 — по числу ядер, 1 — всё в одном процессе)")
+    ap.add_argument("--engine", choices=("auto", "native", "py"), default="auto",
+                    help="движок боя: auto — нативный C, если он собрался и "
+                         "прошёл самопроверку; py — эталонный Python")
     args = ap.parse_args(argv)
 
     fighters, copies = discover()
@@ -512,8 +613,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     max_seconds = int(args.seconds)
     bal = replace(BALANCE, max_seconds=max_seconds)
+    jobs = _workers_default() if args.jobs <= 0 else args.jobs
+    engine = resolve_engine(args.engine)
+    if engine == "native":
+        engine_note = "нативное ядро (C)"
+    elif args.engine == "py":
+        engine_note = "Python-движок (выбран вручную)"
+    else:
+        engine_note = f"Python-движок ({native_reason() or 'нет нативного ядра'})"
 
-    arenas = {m: load_map(m) for m in args.maps}
     pairs = list(itertools.combinations(fighters, 2))
     # Пары идут вперемешку со сменой сторон: при --deadline успевают пройти
     # все пары на равных условиях, а не только первые.
@@ -522,69 +630,77 @@ def main(argv: list[str] | None = None) -> int:
                for home in (0, 1)]
     total = len(matches)
 
+    tasks = []
+    order = []
+    for idx, (a, b, m, s, home) in enumerate(matches):
+        x, y = (a, b) if home == 0 else (b, a)
+        order.append((a, b, x, y, home, m))
+        tasks.append((idx, str(x.path), str(y.path), m, s, max_seconds, engine,
+                      bal))
+
+    # Предзагрузка кэша компиляции в родителе: при fork исполнители получат
+    # уже скомпилированные программы, и на бой останется только exec модуля.
+    for f in fighters:
+        try:
+            load_battle_program(str(f.path))
+        except SystemExit:
+            pass
+
     rec: dict[str, Record] = {f.key: Record() for f in fighters}
     h2h: dict[tuple[str, str], list[int]] = {}
     mrec: dict[tuple[str, str], list[int]] = {}
     t0 = time.perf_counter()
     done = 0
-    for a, b, m, s, home in matches:
-        if args.deadline is not None and time.perf_counter() - t0 >= args.deadline:
-            break
-        x, y = (a, b) if home == 0 else (b, a)
-        world, stats = run_battle(load_inproc(str(x.path)),
-                                  load_inproc(str(y.path)),
-                                  arenas[m], s, bal, max_seconds)
+
+    def finish(task: tuple, result: tuple) -> None:
+        nonlocal done
+        idx = task[0]
+        _, tick, outcome, stats = result
+        a, b, x, y, home, m = order[idx]
+        _fold(rec, h2h, mrec, a, b, x, y, home, m, tick, outcome, stats)
         done += 1
-        rx, ry = rec[x.key], rec[y.key]
-        rx.games += 1
-        ry.games += 1
-        for idx, f in enumerate((x, y)):
-            r, st = rec[f.key], stats[idx]
-            r.dealt += st["dealt"]
-            r.taken += st["taken"]
-            r.errors += st["errors"]
-            r.shots += st["shots"]
-            r.hits += st["hits"]
-            r.ric += st["ric"]
-            r.ric_taken += st["ric_taken"]
-            r.rams += st["rams"]
-            r.hp_left += st["hp_left"]
-            r.ticks += world.tick
-            r.think_total += st["think_total"]
-            r.think_calls += st["think_calls"]
-            r.think_max = max(r.think_max, st["think_max"])
-            r.over_budget += st["over_budget"]
-        # Счёт по картам ведут оба бойца боя: mc — для текущей стороны x,
-        # my — для стороны y. Иначе в отчёт попадёт ровно половина боёв.
-        mc = mrec.setdefault((m, x.key), [0, 0, 0])
-        my = mrec.setdefault((m, y.key), [0, 0, 0])
-        cell = h2h.setdefault((a.key, b.key), [0, 0, 0])
-        if world.outcome == "draw":
-            rx.draws += 1
-            ry.draws += 1
-            cell[1] += 1
-            mc[1] += 1
-            my[1] += 1
-        else:
-            # cell считает победы a (первого в комбинации), x и y — текущие
-            # стороны боя: при home == 1 они поменялись местами.
-            a_won = world.outcome == ("a_win" if home == 0 else "b_win")
-            cell[0 if a_won else 2] += 1
-            if (home == 0) == a_won:
-                rx.wins += 1
-                ry.losses += 1
-                mc[0] += 1
-                my[2] += 1
-            else:
-                rx.losses += 1
-                ry.wins += 1
-                mc[2] += 1
-                my[0] += 1
         if done % 200 == 0 or done == total:
             el = time.perf_counter() - t0
             eta = el / done * (total - done)
             print(f"{done}/{total} боёв ({done / total:.0%}), {el:.0f} с, "
                   f"осталось ~{eta:.0f} с", flush=True)
+
+    def expired() -> bool:
+        return (args.deadline is not None
+                and time.perf_counter() - t0 >= args.deadline)
+
+    print(f"движок: {engine_note}; процессов: {jobs}", flush=True)
+
+    if jobs <= 1:
+        for task in tasks:
+            if expired():
+                break
+            finish(task, _run_match(task))
+    else:
+        import collections
+        from concurrent.futures import ProcessPoolExecutor
+        ahead = max(2, jobs * 2)
+        with ProcessPoolExecutor(max_workers=jobs,
+                                 mp_context=_mp_context()) as pool:
+            pending: collections.deque = collections.deque()
+            it = iter(tasks)
+
+            def refill() -> bool:
+                """Держит ahead задач в работе; False — задач больше нет."""
+                while len(pending) < ahead:
+                    if expired():
+                        return False
+                    try:
+                        pending.append(pool.submit(_run_match, next(it)))
+                    except StopIteration:
+                        return False
+                return True
+
+            refill()
+            while pending:
+                result = pending.popleft().result()
+                finish(tasks[result[0]], result)
+                refill()
 
     elapsed = time.perf_counter() - t0
     report = build_report(fighters, rec, h2h, maps=args.maps,
