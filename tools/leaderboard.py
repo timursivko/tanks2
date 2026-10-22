@@ -444,9 +444,9 @@ def build_report(fighters: list[Fighter], rec: dict[str, Record],
         lines.append(f"- ⚠️ Прогон прерван по `--deadline`: учтено {done} из "
                      f"{planned} боёв — таблица неполная.")
     lines += [
-        "- Обновить таблицу: `python tools/leaderboard.py` — полный прогон "
-        "~8 мин, файл перезапишется. Новые агенты в `pool/` и новые танки в "
-        "`ai/` попадают в турнир сами.",
+        "- Обновить таблицу: `python tools/leaderboard.py` — бои идут "
+        "параллельно (нативное ядро подхватывается само), файл перезапишется. "
+        "Новые агенты в `pool/` и новые танки в `ai/` попадают в турнир сами.",
         "",
     ]
     return "\n".join(lines)
