@@ -15,7 +15,7 @@ on:
       - ".github/bench-trigger"
 
 permissions:
-  contents: write            # результаты замера коммитятся обратно в ветку
+  contents: read
 
 jobs:
   bench:
@@ -73,10 +73,5 @@ jobs:
           cat "$out"
 
       - name: Опубликовать результат
-        run: |
-          cp /tmp/bench.md BENCH.md
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add BENCH.md
-          git commit -m "bench: замер на раннере (автоматически)" || exit 0
-          git push origin HEAD:${{ github.ref_name }}
+        run: cat /tmp/bench.md >> "$GITHUB_STEP_SUMMARY"
+
