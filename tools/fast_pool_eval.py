@@ -83,6 +83,10 @@ def main():
         if my_win: st[0]+=1; tot[0]+=1
         elif my_loss: st[1]+=1; tot[1]+=1
         else: st[2]+=1; tot[2]+=1
+        # Ошибки решений (исключения внутри программы) считаем по стороне
+        # кандидата: без этого сломанная программа тихо набирает 2% вместо
+        # того, чтобы заявить о себе.
+        st[4] += (ea if mine else eb)
         think[0]=max(think[0], tma if mine else tmb); think[1]+=1
     n=sum(tot)
     if not args.quiet:
